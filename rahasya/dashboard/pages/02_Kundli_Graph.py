@@ -1,79 +1,76 @@
-import streamlit as st
 import os
-import json
+
+import streamlit as st
 import streamlit.components.v1 as components
-from pyvis.network import Network
+
+from rahasya.dashboard.components.graph_viewer import build_pyvis_graph
+from rahasya.dashboard.state import get_current_result
+
 
 def load_css():
     css_path = os.path.join(os.path.dirname(__file__), "..", "static", "style.css")
     if os.path.exists(css_path):
-        with open(css_path, "r") as f:
+        with open(css_path, "r", encoding="utf-8") as f:
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
+
 load_css()
 
 st.markdown("<h1 class='neon-text'>KUNDLI GRAPH</h1>", unsafe_allow_html=True)
-st.markdown("Interactive entity relationship visualization.")
+st.markdown("Interactive entity relationship visualization for the active scan.")
 
-def get_mock_graph_data():
-    return {
-        "nodes": [
-            {"id": "n1", "label": "John Doe", "group": "PERSON", "title": "Target"},
-            {"id": "n2", "label": "johndoe@example.com", "group": "EMAIL", "title": "Breached Email"},
-            {"id": "n3", "label": "+1234567890", "group": "PHONE", "title": "Registered Phone"},
-            {"id": "n4", "label": "johndoe99", "group": "USERNAME", "title": "Twitter Handle"},
-            {"id": "n5", "label": "LinkedIn Profile", "group": "SOCIAL_PROFILE", "title": "LinkedIn"},
-        ],
-        "edges": [
-            {"from": "n1", "to": "n2", "value": 1, "title": "Used in"},
-            {"from": "n1", "to": "n3", "value": 1, "title": "Owned by"},
-            {"from": "n1", "to": "n4", "value": 0.8, "title": "Alias"},
-            {"from": "n4", "to": "n5", "value": 0.6, "title": "Linked account"}
-        ]
-    }
+result = get_current_result(st)
 
-color_map = {
-    "PERSON": "#8b5cf6",
-    "EMAIL": "#00d4ff",
-    "PHONE": "#10b981",
-    "USERNAME": "#f59e0b",
-    "SOCIAL_PROFILE": "#ec4899",
-    "BREACH_RECORD": "#ef4444",
-    "DARK_WEB_MENTION": "#dc2626",
-    "URL": "#6366f1",
-    "PHOTO": "#14b8a6",
-    "LOCATION": "#22c55e"
-}
+if result is None:
+    st.info("No active scan result found. Run a scan from New Scan first.")
+else:
+    all_types = sorted({entity.entity_type.value for entity in result.entities})
 
-with st.sidebar:
-    st.header("Graph Filters")
-    entity_types = st.multiselect("Entity Types", list(color_map.keys()), default=list(color_map.keys())[:5])
-    min_confidence = st.slider("Min Confidence", 0.0, 1.0, 0.0)
-    search_node = st.text_input("Search Node")
+    with st.sidebar:
+        st.header("Graph Filters")
+        entity_types = st.multiselect("Entity Types", all_types, default=all_types)
+        min_confidence = st.slider("Min Confidence", 0.0, 1.0, 0.0)
+        search_node = st.text_input("Search Node")
 
-data = get_mock_graph_data()
+    filtered_entities = [
+        entity
+        for entity in result.entities
+        if entity.entity_type.value in entity_types
+        and entity.confidence >= min_confidence
+        and (not search_node or search_node.lower() in str(entity.value).lower())
+    ]
+    filtered_ids = {entity.id for entity in filtered_entities}
+    filtered_relationships = [
+        rel
+        for rel in result.relationships
+        if rel.source_id in filtered_ids
+        and rel.target_id in filtered_ids
+        and rel.confidence >= min_confidence
+    ]
 
-net = Network(height="600px", width="100%", bgcolor="#0a0e17", font_color="#e2e8f0", directed=True)
-net.force_atlas_2based()
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Scan", result.scan_id[:8])
+    col2.metric("Nodes", len(filtered_entities))
+    col3.metric("Edges", len(filtered_relationships))
+    col4.metric("Status", result.status.value)
 
-for node in data["nodes"]:
-    if node["group"] in entity_types:
-        color = color_map.get(node["group"], "#ffffff")
-        net.add_node(node["id"], label=node["label"], title=node["title"], color=color, size=20)
+    if not filtered_entities:
+        st.warning("No entities match the selected filters.")
+    else:
+        html = build_pyvis_graph(filtered_entities, filtered_relationships)
+        components.html(html, height=780, scrolling=True)
 
-for edge in data["edges"]:
-    if edge["value"] >= min_confidence:
-        net.add_edge(edge["from"], edge["to"], title=edge["title"], width=edge["value"] * 3)
-
-# Save to html
-path = "html_graph.html"
-net.save_graph(path)
-
-# Show stats overlay
-col1, col2, col3 = st.columns(3)
-col1.metric("Nodes", len(data["nodes"]))
-col2.metric("Edges", len(data["edges"]))
-col3.metric("Components", 1)
-
-with open(path, 'r', encoding='utf-8') as HtmlFile:
-    source_code = HtmlFile.read()
-    components.html(source_code, height=650)
+        with st.expander("Raw Entities"):
+            st.dataframe(
+                [
+                    {
+                        "type": entity.entity_type.value,
+                        "value": entity.value,
+                        "source": entity.source_module,
+                        "confidence": entity.confidence,
+                        "depth": entity.depth,
+                    }
+                    for entity in filtered_entities
+                ],
+                use_container_width=True,
+            )

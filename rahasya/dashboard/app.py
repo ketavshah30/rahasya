@@ -24,6 +24,8 @@ def initialize_session():
         st.session_state.current_scan_id = None
     if "scans" not in st.session_state:
         st.session_state.scans = {}
+    if "scan_results" not in st.session_state:
+        st.session_state.scan_results = {}
 
 initialize_session()
 

@@ -96,8 +96,14 @@ class Orchestrator:
         self.logger.info(f"Generated {len(seeds)} seed entities from input")
 
         # Add seeds to graph and state
+        registered_seeds: List[Entity] = []
         for seed in seeds:
-            await self._register_entity(scan_id, seed)
+            if await self._register_entity(scan_id, seed):
+                registered_seeds.append(seed)
+
+        for rel in self._build_seed_relationships(registered_seeds):
+            self._scan_state[scan_id]["relationships"].append(rel)
+            await self.graph.add_edge(rel.source_id, rel.target_id, rel)
 
         # Run the processing loop
         asyncio.create_task(self._run_scan_loop(scan_id, seeds))
@@ -415,6 +421,8 @@ class Orchestrator:
             (EntityType.PERSON, EntityType.EMAIL): RelationshipType.HAS_EMAIL,
             (EntityType.PERSON, EntityType.PHONE): RelationshipType.HAS_PHONE,
             (EntityType.PERSON, EntityType.USERNAME): RelationshipType.USES_USERNAME,
+            (EntityType.PERSON, EntityType.LOCATION): RelationshipType.LINKED_TO,
+            (EntityType.PERSON, EntityType.PHOTO): RelationshipType.ASSOCIATED_WITH,
             (EntityType.USERNAME, EntityType.SOCIAL_PROFILE): RelationshipType.HAS_PROFILE,
             (EntityType.EMAIL, EntityType.BREACH_RECORD): RelationshipType.APPEARED_IN_BREACH,
             (EntityType.USERNAME, EntityType.SOCIAL_PROFILE): RelationshipType.HAS_PROFILE,
@@ -425,6 +433,33 @@ class Orchestrator:
         }
         key = (parent.entity_type, child.entity_type)
         return type_map.get(key, RelationshipType.LINKED_TO)
+
+    @staticmethod
+    def _build_seed_relationships(seeds: List[Entity]) -> List[Relationship]:
+        people = [entity for entity in seeds if entity.entity_type == EntityType.PERSON]
+        if not people:
+            return []
+
+        person = people[0]
+        relationships: List[Relationship] = []
+        for entity in seeds:
+            if entity.id == person.id:
+                continue
+            rel_type = Orchestrator._infer_relationship_type(person, entity)
+            if rel_type == RelationshipType.LINKED_TO and entity.entity_type not in {
+                EntityType.LOCATION,
+                EntityType.PHOTO,
+            }:
+                continue
+            relationships.append(Relationship(
+                source_id=person.id,
+                target_id=entity.id,
+                relationship_type=rel_type,
+                confidence=min(person.confidence, entity.confidence),
+                source_module="seed",
+                metadata={"reason": "initial target input"},
+            ))
+        return relationships
 
     def get_scan_result(self, scan_id: str) -> Optional[ScanResult]:
         """Get the current result of a scan.
