@@ -1,0 +1,56 @@
+rules:
+  - name: "Same Email Across Sources"
+    description: "Links entities that share the same email address"
+    source_conditions:
+      - field: "entity_type"
+        operator: "eq"
+        value: "EMAIL"
+    target_conditions:
+      - field: "entity_type"
+        operator: "eq"
+        value: "EMAIL"
+    relationship_type: "SAME_AS"
+    confidence: 0.95
+    enabled: true
+
+  - name: "Same Phone Across Sources"
+    description: "Links entities that share the same phone number"
+    source_conditions:
+      - field: "entity_type"
+        operator: "eq"
+        value: "PHONE"
+    target_conditions:
+      - field: "entity_type"
+        operator: "eq"
+        value: "PHONE"
+    relationship_type: "SAME_AS"
+    confidence: 0.90
+    enabled: true
+
+  - name: "Same Username Across Sources"
+    description: "Links entities that share the same username"
+    source_conditions:
+      - field: "entity_type"
+        operator: "eq"
+        value: "USERNAME"
+    target_conditions:
+      - field: "entity_type"
+        operator: "eq"
+        value: "USERNAME"
+    relationship_type: "LINKED_TO"
+    confidence: 0.70
+    enabled: true
+
+  - name: "Email found in breach"
+    description: "Links email to breach data"
+    source_conditions:
+      - field: "entity_type"
+        operator: "eq"
+        value: "EMAIL"
+    target_conditions:
+      - field: "entity_type"
+        operator: "eq"
+        value: "BREACH_RECORD"
+    relationship_type: "APPEARED_IN_BREACH"
+    confidence: 1.0
+    enabled: true
