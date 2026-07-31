@@ -22,7 +22,7 @@ class EventType(str, Enum):
 class Event:
     type: EventType
     payload: Dict[str, Any]
-    source_module: str
+    source_module: str = "system"
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 

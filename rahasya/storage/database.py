@@ -32,19 +32,19 @@ class AsyncDatabaseManager:
         if self._engine is not None:
             return
 
-        db_url = settings.database.dsn.unicode_string()
+        db_url = settings.db.url
         # Convert postgresql:// to postgresql+asyncpg:// if needed
         if db_url.startswith("postgresql://"):
             db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
 
-        logger.info(f"Initializing database connection pool to {settings.database.host}")
+        logger.info("Initializing database connection pool")
         
         self._engine = create_async_engine(
             db_url,
-            pool_size=20,
-            max_overflow=10,
+            pool_size=settings.db.pool_size,
+            max_overflow=settings.db.max_overflow,
             pool_pre_ping=True,
-            echo=settings.database.echo_sql,
+            echo=settings.db.echo,
         )
         
         self._sessionmaker = async_sessionmaker(

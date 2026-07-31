@@ -1,5 +1,4 @@
-import uuid
-from typing import List
+from typing import List, Optional
 try:
     from rapidfuzz import fuzz
 except ImportError:
@@ -7,7 +6,7 @@ except ImportError:
 
 from rahasya.core.models import Entity, EntityType, Relationship, RelationshipType
 from rahasya.correlation.graph_manager import GraphManager
-from rahasya.config import Settings
+from rahasya.config import Settings, settings
 from rahasya.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -15,9 +14,9 @@ logger = get_logger(__name__)
 class EntityResolver:
     """Entity resolution engine to find matches and create relationships."""
 
-    def __init__(self, graph: GraphManager, config: Settings):
-        self.graph = graph
-        self.config = config
+    def __init__(self, graph: Optional[GraphManager] = None, config: Optional[Settings] = None):
+        self.config = config or settings
+        self.graph = graph or GraphManager(self.config)
         self.name_threshold = 85
         self.hash_threshold = 10
     
@@ -55,7 +54,6 @@ class EntityResolver:
                         # Create relationship if from different sources/modules or just duplicate
                         if e1.id != e2.id:
                             rel = Relationship(
-                                id=uuid.uuid4(),
                                 source_id=e1.id,
                                 target_id=e2.id,
                                 relationship_type=RelationshipType.SAME_AS,
@@ -85,7 +83,6 @@ class EntityResolver:
                 score = fuzz.token_sort_ratio(val1, val2)
                 if score >= self.name_threshold:
                     rel = Relationship(
-                        id=uuid.uuid4(),
                         source_id=p1.id,
                         target_id=p2.id,
                         relationship_type=RelationshipType.SAME_AS,
@@ -108,14 +105,13 @@ class EntityResolver:
         emails = {str(e.value).lower(): e for e in entities if e.entity_type == EntityType.EMAIL}
         
         for entity in entities:
-            if entity.entity_type == EntityType.PROFILE:
+            if entity.entity_type == EntityType.SOCIAL_PROFILE:
                 meta = entity.metadata or {}
                 uname = meta.get("username", "").lower()
                 email = meta.get("email", "").lower()
                 
                 if uname in usernames:
                     rel = Relationship(
-                        id=uuid.uuid4(),
                         source_id=entity.id,
                         target_id=usernames[uname].id,
                         relationship_type=RelationshipType.LINKED_TO,
@@ -126,7 +122,6 @@ class EntityResolver:
                     
                 if email in emails:
                     rel = Relationship(
-                        id=uuid.uuid4(),
                         source_id=entity.id,
                         target_id=emails[email].id,
                         relationship_type=RelationshipType.LINKED_TO,
@@ -140,7 +135,7 @@ class EntityResolver:
     async def _photo_match(self, entities: List[Entity]) -> List[Relationship]:
         """Compare perceptual hashes of PHOTO entities."""
         relationships = []
-        photos = [e for e in entities if e.entity_type == EntityType.IMAGE]
+        photos = [e for e in entities if e.entity_type == EntityType.PHOTO]
         
         for i in range(len(photos)):
             for j in range(i + 1, len(photos)):
@@ -159,7 +154,6 @@ class EntityResolver:
                         if distance <= self.hash_threshold:
                             conf = 1.0 - (distance / 64.0)
                             rel = Relationship(
-                                id=uuid.uuid4(),
                                 source_id=p1.id,
                                 target_id=p2.id,
                                 relationship_type=RelationshipType.SAME_AS,
@@ -187,3 +181,22 @@ class EntityResolver:
                 deduped.append(rel)
                 
         return deduped
+
+    def deterministic_match(self, left: Entity, right: Entity) -> bool:
+        exact_types = {EntityType.EMAIL, EntityType.PHONE, EntityType.USERNAME}
+        return (
+            left.entity_type == right.entity_type
+            and left.entity_type in exact_types
+            and left.normalized_value.lower().strip() == right.normalized_value.lower().strip()
+        )
+
+    def fuzzy_name_match(self, left: Entity, right: Entity) -> bool:
+        if left.entity_type != EntityType.PERSON or right.entity_type != EntityType.PERSON:
+            return False
+        if fuzz is None:
+            return left.normalized_value.lower().strip() == right.normalized_value.lower().strip()
+        score = fuzz.token_sort_ratio(str(left.value).lower(), str(right.value).lower())
+        return score >= self.name_threshold
+
+    def deduplicate_relationships(self, rels: List[Relationship]) -> List[Relationship]:
+        return self._deduplicate_relationships(rels)

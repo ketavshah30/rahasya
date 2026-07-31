@@ -20,7 +20,7 @@ class StealthHTTPClient:
         self.timeout = timeout
         self.max_retries = max_retries
         self._client = httpx.AsyncClient(
-            proxies={"all://": proxy} if proxy else None,
+            proxy=proxy,
             timeout=timeout,
             verify=False
         )

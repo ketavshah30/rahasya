@@ -60,6 +60,8 @@ class APIKeys(BaseModel):
     intelx: Optional[str] = Field(default=None, description="Intelligence X API key")
     dehashed: Optional[str] = Field(default=None, description="DeHashed API key")
     leaklookup: Optional[str] = Field(default=None, description="Leak-Lookup API key")
+    shodan: Optional[str] = Field(default=None, description="Shodan API key")
+    virustotal: Optional[str] = Field(default=None, description="VirusTotal API key")
 
 
 class Neo4jSettings(BaseModel):

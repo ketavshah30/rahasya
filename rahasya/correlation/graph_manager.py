@@ -10,7 +10,7 @@ except ImportError:
     AsyncDriver = None
 
 from rahasya.core.models import Entity, Relationship
-from rahasya.config import Settings
+from rahasya.config import Settings, settings
 from rahasya.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -91,7 +91,7 @@ class NetworkXBackend(GraphBackend):
                 value=entity.value,
                 confidence=entity.confidence,
                 metadata=entity.metadata,
-                scan_id=entity.scan_id
+                scan_id=entity.scan_id or entity.metadata.get("scan_id")
             )
             return node_id
 
@@ -211,9 +211,9 @@ class NetworkXBackend(GraphBackend):
             nodes = []
             for n, d in self.graph.nodes(data=True):
                 color = "#97c2fc"
-                if d.get("entity_type") == "PERSON":
+                if str(d.get("entity_type")).lower() == "person":
                     color = "#fb7e81"
-                elif d.get("entity_type") == "EMAIL":
+                elif str(d.get("entity_type")).lower() == "email":
                     color = "#7be141"
                 
                 nodes.append({
@@ -399,9 +399,9 @@ class Neo4jBackend(GraphBackend):
         pyvis_nodes = []
         for d in nodes:
             color = "#97c2fc"
-            if d.get("type") == "PERSON":
+            if str(d.get("type")).lower() == "person":
                 color = "#fb7e81"
-            elif d.get("type") == "EMAIL":
+            elif str(d.get("type")).lower() == "email":
                 color = "#7be141"
             
             pyvis_nodes.append({
@@ -433,15 +433,18 @@ class Neo4jBackend(GraphBackend):
 class GraphManager:
     """Facade for graph operations."""
     
-    def __init__(self, config: Settings):
-        self.config = config
-        
-        if getattr(config, 'neo4j_uri', None):
+    def __init__(self, config: Optional[Settings] = None):
+        self.config = config or settings
+
+        neo4j_settings = getattr(self.config, "neo4j", None)
+        use_neo4j = getattr(neo4j_settings, "enabled", False) is True
+
+        if use_neo4j:
             try:
                 self.backend = Neo4jBackend(
-                    config.neo4j_uri, 
-                    config.neo4j_user, 
-                    config.neo4j_password
+                    neo4j_settings.uri,
+                    neo4j_settings.user,
+                    neo4j_settings.password
                 )
                 logger.info("Initialized Neo4j Graph Backend")
             except Exception as e:

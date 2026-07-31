@@ -32,6 +32,10 @@ def get_scan_logger(scan_id: str):
     """Get a logger bound to a specific scan_id."""
     return logger.bind(scan_id=scan_id)
 
+def get_logger(name: str):
+    """Get a logger bound to a module/component name."""
+    return logger.bind(component=name)
+
 def time_it(func: Callable) -> Callable:
     """Decorator to measure and log execution time of functions."""
     @functools.wraps(func)

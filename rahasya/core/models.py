@@ -3,30 +3,31 @@ from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import AliasChoices, BaseModel, Field, ConfigDict
+from pydantic import model_validator
 
 
 class EntityType(str, Enum):
-    PERSON = "PERSON"
-    EMAIL = "EMAIL"
-    PHONE = "PHONE"
-    USERNAME = "USERNAME"
-    SOCIAL_PROFILE = "SOCIAL_PROFILE"
-    URL = "URL"
-    PHOTO = "PHOTO"
-    IP_ADDRESS = "IP_ADDRESS"
-    BREACH_RECORD = "BREACH_RECORD"
-    DARK_WEB_MENTION = "DARK_WEB_MENTION"
-    LOCATION = "LOCATION"
-    DOMAIN = "DOMAIN"
-    LEAK_RECORD = "LEAK_RECORD"
+    PERSON = "person"
+    EMAIL = "email"
+    PHONE = "phone"
+    USERNAME = "username"
+    SOCIAL_PROFILE = "social_profile"
+    URL = "url"
+    PHOTO = "photo"
+    IP_ADDRESS = "ip_address"
+    BREACH_RECORD = "breach_record"
+    DARK_WEB_MENTION = "dark_web_mention"
+    LOCATION = "location"
+    DOMAIN = "domain"
+    LEAK_RECORD = "leak_record"
 
 
 class SourceReliability(str, Enum):
-    HIGH = "HIGH"
-    MEDIUM = "MEDIUM"
-    LOW = "LOW"
-    UNVERIFIED = "UNVERIFIED"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    UNVERIFIED = "unverified"
 
 
 class Entity(BaseModel):
@@ -36,8 +37,9 @@ class Entity(BaseModel):
     value: str
     normalized_value: str
     source_module: str
+    scan_id: Optional[str] = None
     source_reliability: SourceReliability = SourceReliability.UNVERIFIED
-    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     discovered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = Field(default_factory=dict)
     parent_entity_id: Optional[str] = None
@@ -58,25 +60,45 @@ class PersonEntity(Entity):
 
 class EmailEntity(Entity):
     entity_type: EntityType = EntityType.EMAIL
-    address: str
-    domain: str
+    address: str = ""
+    domain: str = ""
     provider: Optional[str] = None
     is_disposable: bool = False
+
+    @model_validator(mode="after")
+    def populate_email_parts(self):
+        if not self.address:
+            self.address = self.value.strip().lower()
+        if not self.domain and "@" in self.address:
+            self.domain = self.address.split("@", 1)[1]
+        return self
 
 
 class PhoneEntity(Entity):
     entity_type: EntityType = EntityType.PHONE
-    number: str
+    number: str = ""
     country_code: Optional[str] = None
     carrier: Optional[str] = None
     phone_type: Optional[str] = None
 
+    @model_validator(mode="after")
+    def populate_number(self):
+        if not self.number:
+            self.number = self.value
+        return self
+
 
 class UsernameEntity(Entity):
     entity_type: EntityType = EntityType.USERNAME
-    handle: str
+    handle: str = ""
     platforms_found: List[str] = Field(default_factory=list)
     total_sites_checked: int = 0
+
+    @model_validator(mode="after")
+    def populate_handle(self):
+        if not self.handle:
+            self.handle = self.value.lstrip("@")
+        return self
 
 
 class SocialProfileEntity(Entity):
@@ -130,6 +152,7 @@ class LocationEntity(Entity):
 
 
 class RelationshipType(str, Enum):
+    OWNS = "OWNS"
     HAS_EMAIL = "HAS_EMAIL"
     HAS_PHONE = "HAS_PHONE"
     USES_USERNAME = "USES_USERNAME"
@@ -146,25 +169,50 @@ class RelationshipType(str, Enum):
 
 class Relationship(BaseModel):
     """Represents a relationship between two entities."""
+    id: str = Field(default_factory=lambda: str(uuid4()))
     source_id: str
     target_id: str
-    relationship_type: RelationshipType
+    relationship_type: RelationshipType = Field(
+        validation_alias=AliasChoices("relationship_type", "type")
+    )
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     source_module: str
     discovered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
+    model_config = ConfigDict(populate_by_name=True)
+
 
 class ScanRequest(BaseModel):
     """Initial parameters for an OSINT scan."""
-    name: Optional[str] = None
-    email: Optional[str] = None
-    phone: Optional[str] = None
-    username: Optional[str] = None
+    name: Optional[str] = Field(default=None, validation_alias=AliasChoices("name", "target_name"))
+    email: Optional[str] = Field(default=None, validation_alias=AliasChoices("email", "target_email"))
+    phone: Optional[str] = Field(default=None, validation_alias=AliasChoices("phone", "target_phone"))
+    username: Optional[str] = Field(default=None, validation_alias=AliasChoices("username", "target_username"))
     photo_path: Optional[str] = None
     dob: Optional[str] = None
     age_range: Optional[str] = None
     location: Optional[str] = None
+    max_depth: int = 3
+    max_entities: int = 500
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @property
+    def target_name(self) -> Optional[str]:
+        return self.name
+
+    @property
+    def target_email(self) -> Optional[str]:
+        return self.email
+
+    @property
+    def target_phone(self) -> Optional[str]:
+        return self.phone
+
+    @property
+    def target_username(self) -> Optional[str]:
+        return self.username
 
 
 class ScanStatus(str, Enum):
@@ -194,3 +242,26 @@ class ScanResult(BaseModel):
     entities: List[Entity] = Field(default_factory=list)
     relationships: List[Relationship] = Field(default_factory=list)
     stats: ScanStats = Field(default_factory=ScanStats)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_legacy_counts(cls, data):
+        if isinstance(data, dict):
+            stats = data.get("stats") or {}
+            if "entities_found" in data:
+                stats["total_entities"] = data["entities_found"]
+            if "relationships_found" in data:
+                stats["total_relationships"] = data["relationships_found"]
+            if stats:
+                data["stats"] = stats
+            if isinstance(data.get("status"), str):
+                data["status"] = data["status"].upper()
+        return data
+
+    @property
+    def entities_found(self) -> int:
+        return self.stats.total_entities
+
+    @property
+    def relationships_found(self) -> int:
+        return self.stats.total_relationships

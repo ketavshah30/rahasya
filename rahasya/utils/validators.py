@@ -1,28 +1,29 @@
 import re
+import unicodedata
 import urllib.parse
-from typing import Tuple, List, Optional
+from typing import List, Optional
 try:
     import phonenumbers
 except ImportError:
     phonenumbers = None
 
 
-def normalize_email(email: str) -> Tuple[str, str]:
-    """Cleans an email address and extracts its domain.
-    Returns (cleaned_email, domain).
-    """
+def normalize_email(email: str) -> Optional[str]:
+    """Clean and validate an email address."""
     cleaned = email.strip().lower()
-    if "@" not in cleaned:
-        raise ValueError(f"Invalid email address: {email}")
-    domain = cleaned.split("@")[1]
-    return cleaned, domain
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", cleaned):
+        return None
+    return cleaned
 
 
-def normalize_phone(phone: str, country_code: str = "US") -> str:
+def normalize_phone(phone: str, country_code: str = "US") -> Optional[str]:
     """Normalizes a phone number to E.164 format."""
     if not phonenumbers:
         # Fallback basic normalization if library not installed
         cleaned = re.sub(r'[^\d+]', '', phone)
+        digits = re.sub(r"\D", "", cleaned)
+        if len(digits) < 7:
+            return None
         if not cleaned.startswith('+'):
             cleaned = '+' + cleaned
         return cleaned
@@ -30,10 +31,10 @@ def normalize_phone(phone: str, country_code: str = "US") -> str:
     try:
         parsed = phonenumbers.parse(phone, country_code)
         if not phonenumbers.is_valid_number(parsed):
-            raise ValueError(f"Invalid phone number: {phone}")
+            return None
         return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
-    except Exception as e:
-        raise ValueError(f"Error parsing phone {phone}: {e}")
+    except Exception:
+        return None
 
 
 def generate_username_variants(name: str) -> List[str]:
@@ -62,27 +63,26 @@ def generate_username_variants(name: str) -> List[str]:
     return list(variants)
 
 
-def validate_url(url: str) -> Tuple[bool, str]:
-    """Validates and normalizes a URL. Returns (is_valid, normalized_url)."""
+def validate_url(url: str) -> Optional[str]:
+    """Validate and normalize a URL."""
     try:
         if not url.startswith(('http://', 'https://')):
             url = 'https://' + url
         parsed = urllib.parse.urlparse(url)
-        if not parsed.netloc:
-            return False, url
+        if not parsed.netloc or "." not in parsed.netloc:
+            return None
         
-        normalized = urllib.parse.urlunparse(
+        return urllib.parse.urlunparse(
             (parsed.scheme, parsed.netloc, parsed.path, parsed.params, parsed.query, parsed.fragment)
         )
-        return True, normalized
     except Exception:
-        return False, url
+        return None
 
 
 def extract_domain(url: str) -> Optional[str]:
     """Extracts the domain from a URL."""
-    is_valid, norm_url = validate_url(url)
-    if not is_valid:
+    norm_url = validate_url(url)
+    if not norm_url:
         return None
     try:
         parsed = urllib.parse.urlparse(norm_url)
@@ -99,13 +99,19 @@ DISPOSABLE_DOMAINS = {"mailinator.com", "10minutemail.com", "temp-mail.org", "gu
 def is_disposable_email(email: str) -> bool:
     """Checks if an email is disposable against a known list."""
     try:
-        _, domain = normalize_email(email)
+        normalized = normalize_email(email)
+        if not normalized:
+            return False
+        domain = normalized.split("@", 1)[1]
         return domain in DISPOSABLE_DOMAINS
     except Exception:
         return False
 
 
 def normalize_name(name: str) -> str:
-    """Cleans and title-cases a person's name."""
-    cleaned = re.sub(r'\s+', ' ', name.strip())
-    return cleaned.title()
+    """Normalize whitespace, accents, and casing for a person's name."""
+    cleaned = unicodedata.normalize("NFKD", name)
+    cleaned = cleaned.encode("ascii", "ignore").decode("ascii")
+    cleaned = re.sub(r"[^A-Za-z0-9\s'.-]", "", cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned.strip())
+    return cleaned.lower()

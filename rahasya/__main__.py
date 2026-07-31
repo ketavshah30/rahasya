@@ -11,6 +11,11 @@ import asyncio
 import sys
 import os
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 import click
 from rich.console import Console
 from rich.table import Table
@@ -29,6 +34,11 @@ BANNER = r"""
  ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝    ╚═╝   ╚═╝  ╚═╝
 [/bold cyan]
 [dim]Digital Footprint Intelligence Platform — OSINT Recursive Engine[/dim]
+"""
+
+BANNER = """
+[bold cyan]RAHASYA[/bold cyan]
+[dim]Digital Footprint Intelligence Platform - OSINT Recursive Engine[/dim]
 """
 
 
@@ -223,6 +233,8 @@ def init_db() -> None:
 
     async def _init():
         from rahasya.storage.database import db_manager
+        from rahasya.config import settings
+        db_manager.initialize(settings)
         await db_manager.init_db()
         console.print("[bold green]✓ Database tables created successfully.[/bold green]")
         await db_manager.close_db()

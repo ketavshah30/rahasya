@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional, ClassVar
 
 from rahasya.core.models import Entity, EntityType, SourceReliability
-from rahasya.config import Settings
+from rahasya.config import Settings, settings
 from rahasya.utils.logging import get_logger
 from rahasya.utils.http_client import StealthHTTPClient, TorHTTPClient
 
@@ -34,13 +34,13 @@ class BaseModule(ABC):
     requires_tor: ClassVar[bool] = False
     rate_limit: ClassVar[float] = 1.0  # max requests per second
 
-    def __init__(self, config: Settings):
+    def __init__(self, config: Optional[Settings] = None):
         """Initialize module with application configuration.
 
         Args:
             config: Application-wide Settings instance.
         """
-        self.config = config
+        self.config = config or settings
         self.logger = get_logger(f"module.{self.name}")
         self.http_client: Optional[StealthHTTPClient] = None
         self._initialized = False
@@ -119,7 +119,7 @@ class BaseModule(ABC):
         """
         ...
 
-    async def safe_execute(self, entity: Entity, scan_id: str) -> List[Entity]:
+    async def safe_execute(self, entity: Entity, scan_id: str = "manual") -> List[Entity]:
         """Execute with error handling, rate limiting, and timing.
 
         This is the primary entry point called by the orchestrator.

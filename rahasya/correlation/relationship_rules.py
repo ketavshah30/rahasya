@@ -1,5 +1,4 @@
 import yaml
-import uuid
 from typing import List, Any, Optional
 from pydantic import BaseModel, Field
 
@@ -39,7 +38,6 @@ class RuleEngine:
             if self._match_conditions(source, rule.source_conditions) and \
                self._match_conditions(target, rule.target_conditions):
                 return Relationship(
-                    id=uuid.uuid4(),
                     source_id=source.id,
                     target_id=target.id,
                     relationship_type=rule.relationship_type,
@@ -51,7 +49,6 @@ class RuleEngine:
             if self._match_conditions(target, rule.source_conditions) and \
                self._match_conditions(source, rule.target_conditions):
                 return Relationship(
-                    id=uuid.uuid4(),
                     source_id=target.id,
                     target_id=source.id,
                     relationship_type=rule.relationship_type,
@@ -85,8 +82,12 @@ class RuleEngine:
     def _evaluate_operator(self, actual: Any, operator: str, expected: Any) -> bool:
         try:
             if operator == 'eq':
+                if isinstance(actual, str) and isinstance(expected, str):
+                    return actual.lower() == expected.lower()
                 return actual == expected
             elif operator == 'ne':
+                if isinstance(actual, str) and isinstance(expected, str):
+                    return actual.lower() != expected.lower()
                 return actual != expected
             elif operator == 'in':
                 return actual in expected

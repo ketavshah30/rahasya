@@ -58,6 +58,8 @@ class Orchestrator:
 
         # Per-scan tracking
         self._scan_state: Dict[str, dict] = {}
+        self.entities: List[Entity] = []
+        self._visited_entities: Set[Tuple[str, str]] = set()
 
     async def start_scan(self, request: ScanRequest) -> str:
         """Initialize and run a full OSINT scan.
@@ -280,6 +282,7 @@ class Orchestrator:
         seeds: List[Entity] = []
         common = {
             "source_module": "seed",
+            "scan_id": scan_id,
             "source_reliability": SourceReliability.HIGH,
             "confidence": 1.0,
             "depth": 0,
@@ -291,7 +294,7 @@ class Orchestrator:
             seeds.append(PersonEntity(
                 entity_type=EntityType.PERSON,
                 value=request.name,
-                normalized_value=name_clean.lower(),
+                normalized_value=name_clean,
                 name=name_clean,
                 **common,
             ))
@@ -367,6 +370,34 @@ class Orchestrator:
 
         return seeds
 
+    def generate_seed_entities(self, request: ScanRequest) -> List[Entity]:
+        """Synchronous helper for callers that only need seed expansion."""
+        return self._generate_seed_entities(request, "preview")
+
+    def seed_from_email(self, email: str) -> List[Entity]:
+        return self.generate_seed_entities(ScanRequest(email=email))
+
+    def seed_from_name(self, name: str) -> List[Entity]:
+        return self.generate_seed_entities(ScanRequest(name=name))
+
+    def seed_from_phone(self, phone: str) -> List[Entity]:
+        return self.generate_seed_entities(ScanRequest(phone=phone))
+
+    def seed_from_username(self, username: str) -> List[Entity]:
+        return self.generate_seed_entities(ScanRequest(username=username))
+
+    def infer_relationship_type(self, parent: Entity, child: Entity) -> RelationshipType:
+        return self._infer_relationship_type(parent, child)
+
+    def register_entity(self, entity: Entity) -> bool:
+        """Synchronous in-memory registration helper for lightweight callers."""
+        key = (entity.entity_type.value, entity.normalized_value)
+        if key in self._visited_entities:
+            return False
+        self._visited_entities.add(key)
+        self.entities.append(entity)
+        return True
+
     @staticmethod
     def _infer_relationship_type(
         parent: Entity, child: Entity
@@ -406,7 +437,7 @@ class Orchestrator:
         """
         state = self._scan_state.get(scan_id)
         if not state:
-            return None
+            return ScanResult(scan_id=scan_id, status=ScanStatus.PENDING)
 
         elapsed = time.monotonic() - state["start_time"]
 

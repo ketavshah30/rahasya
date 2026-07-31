@@ -1,7 +1,7 @@
 import asyncio
 import json
 import os
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from rahasya.modules.base import BaseModule
 from rahasya.core.models import Entity, EntityType, SourceReliability, SocialProfileEntity
