@@ -1,23 +1,32 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Rajdhani:wght@400;500;600;700&display=swap');
-
 :root {
-    --bg-dark: #0a0e17;
-    --bg-card: rgba(16, 24, 39, 0.7);
-    --primary-cyan: #00f0ff;
-    --primary-magenta: #ff003c;
-    --text-main: #e2e8f0;
-    --text-muted: #94a3b8;
-    --border-color: rgba(0, 240, 255, 0.2);
-    --glass-bg: rgba(10, 14, 23, 0.6);
+    --bg-dark: #030b07;
+    --bg-card: rgba(7, 28, 18, 0.82);
+    --primary-cyan: #00e5ff;
+    --primary-magenta: #ff3b7d;
+    --phosphor-green: #00ff88;
+    --text-main: #d8ffe9;
+    --text-muted: #7fb99a;
+    --border-color: rgba(0, 255, 136, 0.24);
+    --glass-bg: rgba(4, 19, 12, 0.82);
 }
 
 body, .stApp {
     background-color: var(--bg-dark);
     color: var(--text-main);
-    font-family: 'Inter', sans-serif;
+    font-family: Consolas, 'Courier New', monospace;
     background-image: 
         linear-gradient(rgba(10, 14, 23, 0.9), rgba(10, 14, 23, 0.9)),
         url('data:image/svg+xml;utf8,<svg width="40" height="40" xmlns="http://www.w3.org/2000/svg"><path d="M0 0h40v40H0z" fill="none"/><path d="M0 39.5h40M39.5 0v40" stroke="rgba(0, 240, 255, 0.05)" stroke-width="1"/></svg>');
+}
+
+.stApp::after {
+    content: "";
+    pointer-events: none;
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    opacity: 0.13;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,.18) 0, rgba(0,0,0,.18) 1px, transparent 1px, transparent 4px);
 }
 
 /* Matrix Rain Effect for Sidebar Background */
@@ -47,7 +56,7 @@ body, .stApp {
 }
 
 h1, h2, h3, h4, h5, h6 {
-    font-family: 'Rajdhani', sans-serif;
+    font-family: Consolas, 'Courier New', monospace;
     letter-spacing: 1px;
 }
 
@@ -71,8 +80,8 @@ h1, h2, h3, h4, h5, h6 {
 
 /* Neon Text */
 .neon-text {
-    color: var(--primary-cyan);
-    text-shadow: 0 0 5px rgba(0, 240, 255, 0.5), 0 0 10px rgba(0, 240, 255, 0.3);
+    color: var(--phosphor-green);
+    text-shadow: 0 0 5px rgba(0, 255, 136, 0.5), 0 0 10px rgba(0, 229, 255, 0.25);
     font-weight: 700;
 }
 
@@ -88,7 +97,7 @@ h1, h2, h3, h4, h5, h6 {
     color: var(--primary-cyan);
     border: 1px solid var(--primary-cyan);
     border-radius: 4px;
-    font-family: 'Rajdhani', sans-serif;
+    font-family: Consolas, 'Courier New', monospace;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 1px;
@@ -212,7 +221,7 @@ h1, h2, h3, h4, h5, h6 {
     border: 1px solid var(--border-color) !important;
     border-radius: 4px !important;
     color: var(--primary-cyan) !important;
-    font-family: 'Rajdhani', sans-serif;
+    font-family: Consolas, 'Courier New', monospace;
 }
 
 /* Metric Cards */

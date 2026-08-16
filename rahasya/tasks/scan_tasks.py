@@ -10,6 +10,21 @@ from rahasya.core.models import ScanRequest, ScanStatus, Entity
 from rahasya.storage.repository import ScanRepository, EntityRepository
 
 
+@app.task(
+    bind=True,
+    name="rahasya.tasks.scan_tasks.execute_scan",
+    max_retries=2,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+)
+def execute_scan(self, scan_id: str, request_data: Dict[str, Any]) -> str:
+    """Run the durable orchestrator lifecycle in a Celery worker."""
+    from rahasya.dashboard.state import _background_worker
+
+    _background_worker(scan_id, request_data)
+    return scan_id
+
+
 async def _async_start_scan(scan_request_dict: Dict[str, Any]) -> str:
     """Async implementation of starting a scan."""
     repo = ScanRepository()

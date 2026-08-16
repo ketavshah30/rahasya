@@ -3,51 +3,47 @@ import os
 import plotly.express as px
 import streamlit as st
 
-from rahasya.dashboard.state import entities_to_dataframe, get_current_result
+from rahasya.dashboard.state import autorefresh_running, render_scan_detail_bar, timeline_dataframe
 
 
 def load_css():
     css_path = os.path.join(os.path.dirname(__file__), "..", "static", "style.css")
     if os.path.exists(css_path):
-        with open(css_path, "r", encoding="utf-8") as f:
-            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+        with open(css_path, "r", encoding="utf-8") as stream:
+            st.markdown(f"<style>{stream.read()}</style>", unsafe_allow_html=True)
 
 
 load_css()
+st.markdown("<h1 class='neon-text'>IDENTITY PRESENCE TIMELINE</h1>", unsafe_allow_html=True)
+st.markdown("Profile creation, archive snapshots, breaches, dark-web sightings, and discovery events.")
 
-st.markdown("<h1 class='neon-text'>TEMPORAL TIMELINE</h1>", unsafe_allow_html=True)
-st.markdown("Chronological view of entities discovered in the active scan.")
-
-result = get_current_result(st)
-if result is None:
-    st.info("No active scan result found. Run a scan from New Scan first.")
-else:
-    df = entities_to_dataframe(result.entities)
-
-    if df.empty:
-        st.info("No timeline data available for this scan.")
+result = render_scan_detail_bar(st, "timeline")
+autorefresh_running(st, result, "timeline")
+if result is not None:
+    frame = timeline_dataframe(result)
+    if frame.empty:
+        st.info("No temporal evidence is available for this investigation yet.")
     else:
-        types = st.multiselect("Filter by Type", sorted(df["Type"].unique()), default=sorted(df["Type"].unique()))
-        filtered_df = df[df["Type"].isin(types)]
-
-        fig = px.scatter(
-            filtered_df,
-            x="Discovered",
-            y="Type",
-            color="Type",
-            hover_data=["Entity", "Source", "Confidence", "Depth"],
-            title="Entity Discovery Timeline",
+        event_types = sorted(frame["Event"].unique())
+        selected = st.multiselect("Event types", event_types, default=event_types)
+        filtered = frame[frame["Event"].isin(selected)].sort_values("Start")
+        figure = px.timeline(
+            filtered,
+            x_start="Start",
+            x_end="Finish",
+            y="Identity",
+            color="Event",
+            hover_data=["Source", "URL", "Confidence", "Type"],
+            title="Online identity evidence by first-seen date",
         )
-        fig.update_layout(
+        figure.update_yaxes(autorange="reversed")
+        figure.update_layout(
             plot_bgcolor="rgba(0,0,0,0)",
             paper_bgcolor="rgba(0,0,0,0)",
-            font_color="#e2e8f0",
-            xaxis_title="Time of Discovery",
-            yaxis_title="Entity Type",
-            margin=dict(l=20, r=20, t=40, b=20),
+            font_color="#d8ffe9",
+            xaxis_title="Observed date (zoom or drag to inspect)",
+            margin=dict(l=20, r=20, t=50, b=20),
         )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-        st.markdown("### Raw Event Log")
-        st.dataframe(filtered_df.sort_values(by="Discovered", ascending=False), use_container_width=True)
+        st.plotly_chart(figure, width="stretch")
+        st.markdown("### Evidence ledger")
+        st.dataframe(filtered.drop(columns=["Finish"]), width="stretch")

@@ -2,6 +2,9 @@ import asyncio
 import httpx
 from httpx_socks import AsyncProxyTransport
 import logging
+import time
+
+from rahasya.storage.network_audit import record_audit_event
 
 class TorManager:
     """Manages Tor connections and circuit renewal for dark web modules."""
@@ -14,14 +17,38 @@ class TorManager:
         self.proxy_url = f"socks5://127.0.0.1:{self.socks_port}"
         
     async def check_tor_running(self) -> bool:
+        url = "https://check.torproject.org/api/ip"
+        started = time.monotonic()
         try:
             transport = AsyncProxyTransport.from_url(self.proxy_url)
             async with httpx.AsyncClient(transport=transport, timeout=10.0) as client:
-                resp = await client.get("https://check.torproject.org/api/ip")
+                resp = await client.get(url)
+                is_tor = resp.status_code == 200 and bool(resp.json().get("IsTor", False))
+                record_audit_event(
+                    "network_request",
+                    outcome="success" if is_tor else "failed",
+                    url=url,
+                    method="GET",
+                    status_code=resp.status_code,
+                    duration_ms=round((time.monotonic() - started) * 1000, 2),
+                    via_proxy=True,
+                    purpose="tor_exit_verification",
+                    message=None if is_tor else "Endpoint did not confirm a Tor exit connection",
+                )
                 if resp.status_code == 200:
-                    data = resp.json()
-                    return data.get("IsTor", False)
-        except Exception:
+                    return is_tor
+        except Exception as exc:
+            record_audit_event(
+                "network_request",
+                outcome="failed",
+                url=url,
+                method="GET",
+                duration_ms=round((time.monotonic() - started) * 1000, 2),
+                via_proxy=True,
+                purpose="tor_exit_verification",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
             return False
         return False
         
@@ -52,12 +79,36 @@ class TorManager:
             
     async def health_check(self) -> bool:
         """Test .onion connectivity."""
+        url = "https://duckduckgogg42xjoc72x3sjianso2pfpt5obsmzjhoqcwxvtzgw.onion/"
+        started = time.monotonic()
+        client = None
         try:
-            # DuckDuckGo Onion
-            url = "https://duckduckgogg42xjoc72x3sjianso2pfpt5obsmzjhoqcwxvtzgw.onion/"
             client = self.get_async_client()
             resp = await client.get(url)
-            await client.aclose()
+            record_audit_event(
+                "network_request",
+                outcome="success" if resp.status_code == 200 else "http_error",
+                url=url,
+                method="GET",
+                status_code=resp.status_code,
+                duration_ms=round((time.monotonic() - started) * 1000, 2),
+                via_proxy=True,
+                purpose="tor_onion_health_check",
+            )
             return resp.status_code == 200
-        except Exception:
+        except Exception as exc:
+            record_audit_event(
+                "network_request",
+                outcome="failed",
+                url=url,
+                method="GET",
+                duration_ms=round((time.monotonic() - started) * 1000, 2),
+                via_proxy=True,
+                purpose="tor_onion_health_check",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
             return False
+        finally:
+            if client is not None:
+                await client.aclose()

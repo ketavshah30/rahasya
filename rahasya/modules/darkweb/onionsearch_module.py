@@ -1,12 +1,15 @@
 import asyncio
 import json
 import os
+import time
 from typing import List
+from urllib.parse import quote_plus
 from bs4 import BeautifulSoup
 
 from rahasya.modules.base import BaseModule
 from rahasya.core.models import Entity, EntityType, SourceReliability, DarkWebMention
 from rahasya.modules.darkweb.tor_manager import TorManager
+from rahasya.storage.network_audit import record_audit_event
 
 class OnionSearchModule(BaseModule):
     name = "OnionSearch"
@@ -25,21 +28,49 @@ class OnionSearchModule(BaseModule):
         if os.path.exists(config_path):
             with open(config_path, "r") as f:
                 self.engines = json.load(f)
+
+    async def setup(self):
+        await super().setup()
+        if not self.engines:
+            await self.initialize()
                 
     async def search_engine(self, engine, query, entity):
         results = []
         if not engine.get("enabled", True):
+            record_audit_event(
+                "source_skipped",
+                outcome="skipped",
+                url=engine.get("url"),
+                source_name=engine.get("name", "unknown"),
+                message="Search engine is disabled in onion_engines.json",
+            )
             return results
             
         url = engine["url"].replace("{query}", query)
+        started = time.monotonic()
+        response_recorded = False
         try:
             client = self.tor.get_async_client()
-            resp = await client.get(url)
-            await client.aclose()
+            try:
+                resp = await client.get(url)
+            finally:
+                await client.aclose()
+            record_audit_event(
+                "network_request",
+                outcome="success" if resp.status_code == 200 else "http_error",
+                url=url,
+                method="GET",
+                status_code=resp.status_code,
+                duration_ms=round((time.monotonic() - started) * 1000, 2),
+                via_proxy=True,
+                source_name=engine.get("name", "unknown"),
+                purpose="dark_web_search",
+            )
+            response_recorded = True
             
             if resp.status_code == 200:
                 soup = BeautifulSoup(resp.text, 'html.parser')
-                engine_type = engine.get("type", "generic")
+                engine_type = engine.get("parser", engine.get("type", "generic"))
                 
                 # Simple parsing logic depending on engine type
                 items = []
@@ -74,10 +105,22 @@ class OnionSearchModule(BaseModule):
                             source_url=href,
                             context_snippet=item.text.strip()[:200],
                             search_engine=engine["name"],
-                            is_onion=True
+                            is_onion=".onion" in href
                         )
                         results.append(mention)
         except Exception as e:
+            record_audit_event(
+                "source_parse_failed" if response_recorded else "network_request",
+                outcome="failed",
+                url=url,
+                method="GET",
+                duration_ms=round((time.monotonic() - started) * 1000, 2),
+                via_proxy=True,
+                source_name=engine.get("name", "unknown"),
+                purpose="dark_web_search",
+                error_type=type(e).__name__,
+                error=str(e),
+            )
             self.logger.error(f"Error searching {engine['name']}: {e}")
             
         return results
@@ -90,7 +133,7 @@ class OnionSearchModule(BaseModule):
             self.logger.warning("Tor is not running. Using fallback.")
             return []
             
-        query = entity.value
+        query = quote_plus(entity.value)
         tasks = [self.search_engine(eng, query, entity) for eng in self.engines]
         completed = await asyncio.gather(*tasks, return_exceptions=True)
         

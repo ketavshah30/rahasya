@@ -4,7 +4,15 @@ try:
 except ImportError:
     fuzz = None
 
-from rahasya.core.models import Entity, EntityType, Relationship, RelationshipType
+from rahasya.core.models import (
+    Entity,
+    EntityType,
+    PartialEmailEntity,
+    PartialPhoneEntity,
+    PersonCluster,
+    Relationship,
+    RelationshipType,
+)
 from rahasya.correlation.graph_manager import GraphManager
 from rahasya.config import Settings, settings
 from rahasya.utils.logging import get_logger
@@ -30,6 +38,7 @@ class EntityResolver:
         relationships.extend(await self._fuzzy_name_match(entities))
         relationships.extend(await self._cross_source_match(entities))
         relationships.extend(await self._photo_match(entities))
+        relationships.extend(await self._recovery_hint_match(entities))
         
         return self._deduplicate_relationships(relationships)
     
@@ -42,7 +51,7 @@ class EntityResolver:
         grouped = {}
         for entity in entities:
             if entity.entity_type in exact_types:
-                key = (entity.entity_type, str(entity.value).lower().strip())
+                key = (entity.entity_type, entity.normalized_value)
                 grouped.setdefault(key, []).append(entity)
                 
         for (etype, val), group in grouped.items():
@@ -78,7 +87,7 @@ class EntityResolver:
                 p1, p2 = persons[i], persons[j]
                 
                 # Check scan_id and other context if needed, here we just do value
-                val1, val2 = str(p1.value).lower(), str(p2.value).lower()
+                val1, val2 = p1.normalized_value, p2.normalized_value
                 
                 score = fuzz.token_sort_ratio(val1, val2)
                 if score >= self.name_threshold:
@@ -101,8 +110,8 @@ class EntityResolver:
         # This implementation requires broader graph context in a real scenario,
         # but here we'll map common profile linkages within the provided batch.
         
-        usernames = {str(e.value).lower(): e for e in entities if e.entity_type == EntityType.USERNAME}
-        emails = {str(e.value).lower(): e for e in entities if e.entity_type == EntityType.EMAIL}
+        usernames = {e.normalized_value: e for e in entities if e.entity_type == EntityType.USERNAME}
+        emails = {e.normalized_value: e for e in entities if e.entity_type == EntityType.EMAIL}
         
         for entity in entities:
             if entity.entity_type == EntityType.SOCIAL_PROFILE:
@@ -151,12 +160,16 @@ class EntityResolver:
                         bin2 = bin(int(h2, 16))[2:].zfill(64)
                         distance = sum(c1 != c2 for c1, c2 in zip(bin1, bin2))
                         
-                        if distance <= self.hash_threshold:
+                        if distance <= 12:
                             conf = 1.0 - (distance / 64.0)
                             rel = Relationship(
                                 source_id=p1.id,
                                 target_id=p2.id,
-                                relationship_type=RelationshipType.SAME_AS,
+                                relationship_type=(
+                                    RelationshipType.SAME_AS
+                                    if distance <= 6
+                                    else RelationshipType.LIKELY_SAME
+                                ),
                                 confidence=conf,
                                 source_module="entity_resolver"
                             )
@@ -165,6 +178,86 @@ class EntityResolver:
                         pass
                         
         return relationships
+
+    async def _recovery_hint_match(self, entities: List[Entity]) -> List[Relationship]:
+        """Lock masked provider hints to known values and cross-link shared hints."""
+        relationships: List[Relationship] = []
+        partials = [e for e in entities if e.entity_type in {EntityType.PARTIAL_EMAIL, EntityType.PARTIAL_PHONE}]
+        for partial in partials:
+            expected = EntityType.EMAIL if partial.entity_type == EntityType.PARTIAL_EMAIL else EntityType.PHONE
+            matcher_cls = PartialEmailEntity if partial.entity_type == EntityType.PARTIAL_EMAIL else PartialPhoneEntity
+            matcher = matcher_cls.model_validate(partial.model_dump())
+            for known in entities:
+                if known.entity_type == expected and matcher.matches_pattern(known.normalized_value):
+                    relationships.append(Relationship(
+                        source_id=partial.id,
+                        target_id=known.id,
+                        relationship_type=RelationshipType.ALT_ACCOUNT_OF,
+                        confidence=0.92,
+                        source_module="recovery_matcher",
+                        metadata={"reason": "masked recovery hint matched known identifier"},
+                    ))
+
+        grouped = {}
+        for partial in partials:
+            grouped.setdefault((partial.entity_type, partial.normalized_value), []).append(partial)
+        for group in grouped.values():
+            for index, left in enumerate(group):
+                for right in group[index + 1:]:
+                    if left.id != right.id:
+                        relationships.append(Relationship(
+                            source_id=left.id,
+                            target_id=right.id,
+                            relationship_type=RelationshipType.SHARES_RECOVERY,
+                            confidence=0.85,
+                            source_module="recovery_matcher",
+                        ))
+        return relationships
+
+    def build_person_clusters(
+        self,
+        entities: List[Entity],
+        relationships: List[Relationship],
+    ) -> List[PersonCluster]:
+        """Build deterministic connected identity clusters for persistence/UI."""
+        parents = {entity.id: entity.id for entity in entities}
+
+        def find(item):
+            while parents[item] != item:
+                parents[item] = parents[parents[item]]
+                item = parents[item]
+            return item
+
+        def union(left, right):
+            left_root, right_root = find(left), find(right)
+            if left_root != right_root:
+                parents[right_root] = left_root
+
+        identity_edges = {
+            RelationshipType.SAME_AS,
+            RelationshipType.ALT_ACCOUNT_OF,
+            RelationshipType.SHARES_RECOVERY,
+            RelationshipType.HAS_EMAIL,
+            RelationshipType.HAS_PHONE,
+            RelationshipType.USES_USERNAME,
+            RelationshipType.HAS_PROFILE,
+        }
+        for relationship in relationships:
+            if (
+                relationship.relationship_type in identity_edges
+                and relationship.confidence >= self.config.scan.confidence_threshold
+                and relationship.source_id in parents
+                and relationship.target_id in parents
+            ):
+                union(relationship.source_id, relationship.target_id)
+        grouped = {}
+        for entity_id in parents:
+            grouped.setdefault(find(entity_id), []).append(entity_id)
+        return [
+            PersonCluster(entity_ids=members, evidence=["resolved identity graph"])
+            for members in grouped.values()
+            if len(members) > 1
+        ]
     
     def _deduplicate_relationships(self, rels: List[Relationship]) -> List[Relationship]:
         """Remove duplicate (A,B) == (B,A) relationships."""
@@ -195,7 +288,7 @@ class EntityResolver:
             return False
         if fuzz is None:
             return left.normalized_value.lower().strip() == right.normalized_value.lower().strip()
-        score = fuzz.token_sort_ratio(str(left.value).lower(), str(right.value).lower())
+        score = fuzz.token_sort_ratio(left.normalized_value, right.normalized_value)
         return score >= self.name_threshold
 
     def deduplicate_relationships(self, rels: List[Relationship]) -> List[Relationship]:

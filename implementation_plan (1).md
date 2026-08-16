@@ -2,7 +2,7 @@
 
 ## Overview
 
-Build **Rahasya**, a modular Python platform that accepts minimal target input (name, email, phone, username, photo) and recursively discovers the maximum possible digital footprint by orchestrating free/open-source OSINT tools, correlating findings in a graph database, and presenting results in a cinematic "Kundli" dashboard.
+Build **Rahasya**, a modular Python platform that accepts minimal target input (name, email, phone, username, photo) and recursively discovers the maximum possible digital footprint by orchestrating free/open-source OSINT tools, correlating findings in a graph database, and presenting results in a cinematic CIA Web dashboard.
 
 ---
 
@@ -67,7 +67,7 @@ graph TB
     end
 
     subgraph "Output Layer"
-        M["Kundli Dashboard<br/>(Streamlit + PyVis)"]
+        M["CIA Web Dashboard<br/>(Streamlit + PyVis)"]
         N["Report Generator<br/>(PDF / HTML)"]
     end
 
@@ -151,12 +151,12 @@ Rahasya/
 │   │   ├── sql_models.py           # SQL ORM models
 │   │   └── migrations/             # Alembic migrations
 │   │
-│   ├── dashboard/                  # Module 8: Kundli Dashboard
+│   ├── dashboard/                  # Module 8: CIA Web Dashboard
 │   │   ├── __init__.py
 │   │   ├── app.py                  # Streamlit main app
 │   │   ├── pages/
 │   │   │   ├── 01_🔍_New_Scan.py
-│   │   │   ├── 02_🕸️_Kundli_Graph.py
+│   │   │   ├── 02_CIA_Web.py
 │   │   │   ├── 03_📊_Timeline.py
 │   │   │   ├── 04_⚠️_Exposure_Report.py
 │   │   │   └── 05_📄_Export.py
@@ -448,7 +448,7 @@ Relationships:
 
 ---
 
-### Module 8: Kundli Dashboard
+### Module 8: CIA Web Dashboard
 
 The dashboard should feel like a **CIA-movie intelligence terminal** — dark theme, neon accents, real-time data feeds, interactive graph exploration.
 
@@ -464,7 +464,7 @@ The dashboard should feel like a **CIA-movie intelligence terminal** — dark th
 - Scan configuration: depth, timeout, module selection
 - Live progress tracker with animated module status
 
-**Page 2: Kundli Graph** (`02_🕸️_Kundli_Graph.py`)
+**Page 2: CIA Web** (`02_CIA_Web.py`)
 - Full interactive graph visualization (PyVis)
 - Color-coded nodes by entity type
 - Edge thickness by confidence score
@@ -552,7 +552,7 @@ Build the skeleton: input → orchestrator → 2 modules → graph → basic das
 #### Dashboard (Skeleton)
 - [NEW] `rahasya/dashboard/app.py` — Streamlit app shell
 - [NEW] `rahasya/dashboard/pages/01_🔍_New_Scan.py`
-- [NEW] `rahasya/dashboard/pages/02_🕸️_Kundli_Graph.py`
+- [NEW] `rahasya/dashboard/pages/02_CIA_Web.py`
 - [NEW] `rahasya/dashboard/static/style.css` — dark theme CSS
 
 ---

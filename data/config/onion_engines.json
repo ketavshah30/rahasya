@@ -1,7 +1,13 @@
 [
   {
-    "name": "Ahmia",
+    "name": "Ahmia Onion",
     "url": "http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion/search/?q={query}",
+    "parser": "ahmia",
+    "enabled": true
+  },
+  {
+    "name": "Ahmia Clearnet",
+    "url": "https://ahmia.fi/search/?q={query}",
     "parser": "ahmia",
     "enabled": true
   },
@@ -9,6 +15,12 @@
     "name": "Haystak",
     "url": "http://haystak5njsmn2hqkewecpaxetahtwhsbsa64jom2k22z5afxhnpxfid.onion/?q={query}",
     "parser": "haystak",
+    "enabled": true
+  },
+  {
+    "name": "Torch",
+    "url": "http://torchqsxk47ubqj53l2tj54qlwgvxgr5ohs7o3bck2p4l4xwjsm7v7ad.onion/search?q={query}",
+    "parser": "generic",
     "enabled": true
   }
 ]

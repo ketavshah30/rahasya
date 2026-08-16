@@ -17,12 +17,11 @@ class IntelXModule(BaseModule):
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.http_client = StealthHTTPClient()
         self.daily_usage = 0
         
     async def execute(self, entity: Entity, scan_id: str) -> List[Entity]:
         results = []
-        api_key = getattr(self.config.api_keys, "intelx", None)
+        api_key = self._get_api_key()
         
         if not api_key:
             return results
@@ -117,4 +116,4 @@ class IntelXModule(BaseModule):
         return results
 
     def is_available(self) -> bool:
-        return bool(getattr(self.config.api_keys, "intelx", None))
+        return bool(self._get_api_key())

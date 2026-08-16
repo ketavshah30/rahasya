@@ -1,0 +1,94 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: rahasya
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rahasya"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  tor:
+    image: dperson/torproxy:latest
+    ports:
+      - "127.0.0.1:9050:9050"
+
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/change-me-now
+    volumes:
+      - neo4j-data:/data
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+
+  web:
+    build: .
+    env_file:
+      - path: .env.example
+      - path: .env
+        required: false
+    ports:
+      - "8501:8501"
+    volumes:
+      - scan-data:/app/data/scans
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: celery -A rahasya.celery_app:app worker --loglevel=INFO --concurrency=4
+    env_file:
+      - path: .env.example
+      - path: .env
+        required: false
+    environment:
+      RAHASYA_METRICS_PORT: "9108"
+    ports:
+      - "9108:9108"
+    volumes:
+      - scan-data:/app/data/scans
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  flower:
+    build: .
+    command: celery -A rahasya.celery_app:app flower --port=5555
+    env_file:
+      - path: .env.example
+      - path: .env
+        required: false
+    ports:
+      - "127.0.0.1:5555:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  redis-data:
+  neo4j-data:
+  scan-data:

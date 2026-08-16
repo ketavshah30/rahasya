@@ -16,7 +16,6 @@ class LeakLookupModule(BaseModule):
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.http_client = StealthHTTPClient()
         
     async def execute(self, entity: Entity, scan_id: str) -> List[Entity]:
         results = []

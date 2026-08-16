@@ -4,10 +4,12 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from typing import List
 
 from rahasya.modules.base import BaseModule
 from rahasya.core.models import Entity, EntityType, SourceReliability, SocialProfileEntity, EmailEntity
+from rahasya.storage.network_audit import record_audit_event
 
 class MaigretModule(BaseModule):
     name = "Maigret"
@@ -24,8 +26,11 @@ class MaigretModule(BaseModule):
         if entity.entity_type == EntityType.EMAIL:
             target = target.split("@")[0]
             
-        temp_dir = tempfile.gettempdir()
-        temp_file = os.path.join(temp_dir, f"maigret_report_{scan_id}.json")
+        temp = tempfile.NamedTemporaryFile(
+            prefix=f"maigret_report_{scan_id}_", suffix=".json", delete=False
+        )
+        temp_file = temp.name
+        temp.close()
         
         try:
             # Try to run maigret via subprocess
@@ -35,13 +40,28 @@ class MaigretModule(BaseModule):
                 "--no-color",
                 "--timeout", "10"
             ]
-            
+            process_started = time.monotonic()
+            record_audit_event(
+                "provider_process_started",
+                outcome="started",
+                provider="maigret",
+                target=target,
+            )
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
+            record_audit_event(
+                "provider_process_completed",
+                outcome="success" if process.returncode == 0 else "failed",
+                provider="maigret",
+                return_code=process.returncode,
+                duration_ms=round((time.monotonic() - process_started) * 1000, 2),
+                stdout=stdout.decode(errors="replace")[-500:] if stdout else None,
+                error=stderr.decode(errors="replace")[-500:] if stderr else None,
+            )
             
             if os.path.exists(temp_file):
                 with open(temp_file, "r", encoding="utf-8") as f:
@@ -49,8 +69,18 @@ class MaigretModule(BaseModule):
                     
                 report = data.get("report", {}).get(target, {})
                 for site, info in report.items():
-                    if info.get("status") == "found":
-                        url = info.get("url_user", "")
+                    status = str(info.get("status", "unknown")).casefold()
+                    url = info.get("url_user", "") or info.get("url_main", "")
+                    found = status == "found" or "claimed" in status
+                    record_audit_event(
+                        "provider_site_check",
+                        outcome="success" if found else ("failed" if "error" in status else "not_found"),
+                        url=url or None,
+                        provider="maigret",
+                        site=site,
+                        provider_status=status,
+                    )
+                    if found:
                         if not url:
                             continue
                             
@@ -94,15 +124,21 @@ class MaigretModule(BaseModule):
                                 )
                                 results.append(email_entity)
                                 
-                # Cleanup
-                os.remove(temp_file)
-                
         except Exception as e:
+            record_audit_event(
+                "provider_process_failed",
+                outcome="failed",
+                provider="maigret",
+                target=target,
+                error_type=type(e).__name__,
+                error=str(e),
+            )
             self.logger.error(f"Maigret execution failed: {e}")
+        finally:
             if os.path.exists(temp_file):
                 try:
                     os.remove(temp_file)
-                except:
+                except OSError:
                     pass
             
         return results

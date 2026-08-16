@@ -1,28 +1,29 @@
 import asyncio
+from datetime import datetime, timezone
 from typing import List
+from urllib.parse import quote_plus
 
 from rahasya.modules.base import BaseModule
-from rahasya.core.models import Entity, EntityType, SourceReliability
-from rahasya.utils.http_client import StealthHTTPClient
+from rahasya.core.models import Entity, EntityType, SourceReliability, TimelineEvent
 
 class ArchiveModule(BaseModule):
     name = "WaybackMachine"
     description = "Search Internet Archive for historical snapshots"
     version = "1.0.0"
-    accepts = [EntityType.URL, EntityType.DOMAIN]
-    produces = [EntityType.URL]
+    accepts = [EntityType.URL, EntityType.DOMAIN, EntityType.SOCIAL_PROFILE]
+    produces = [EntityType.URL, EntityType.TIMELINE_EVENT]
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.http_client = StealthHTTPClient()
         
     async def execute(self, entity: Entity, scan_id: str) -> List[Entity]:
         results = []
         url = entity.value
+        encoded_url = quote_plus(url)
         
         # 1. Availability API
         try:
-            avail_url = f"https://archive.org/wayback/available?url={url}"
+            avail_url = f"https://archive.org/wayback/available?url={encoded_url}"
             avail_resp = await self.http_client.get(avail_url)
             
             if avail_resp.status_code == 200:
@@ -51,7 +52,7 @@ class ArchiveModule(BaseModule):
             
         # 2. CDX API (last 20)
         try:
-            cdx_url = f"https://web.archive.org/cdx/search/cdx?url={url}&output=json&limit=20"
+            cdx_url = f"https://web.archive.org/cdx/search/cdx?url={encoded_url}&output=json&limit=20"
             cdx_resp = await self.http_client.get(cdx_url)
             
             if cdx_resp.status_code == 200:
@@ -79,6 +80,24 @@ class ArchiveModule(BaseModule):
                                 depth=entity.depth + 1
                             )
                             results.append(cdx_ent)
+                            try:
+                                occurred_at = datetime.strptime(timestamp[:14], "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+                            except ValueError:
+                                continue
+                            results.append(TimelineEvent(
+                                value=f"First archive snapshot: {url}",
+                                normalized_value=f"archive:{url.casefold()}:{timestamp}",
+                                source_module=self.name,
+                                source_reliability=SourceReliability.HIGH,
+                                confidence=0.95,
+                                parent_entity_id=entity.id,
+                                depth=entity.depth + 1,
+                                event_type="first_snapshot",
+                                occurred_at=occurred_at,
+                                subject_entity_id=entity.id,
+                                source_url=archive_url,
+                                metadata={"timestamp": timestamp, "url": archive_url, "subject": url},
+                            ))
         except Exception as e:
             self.logger.error(f"CDX API failed: {e}")
             

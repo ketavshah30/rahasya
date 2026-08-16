@@ -4,6 +4,7 @@ Provides the AsyncDatabaseManager for handling SQLAlchemy 2.0 async sessions,
 connection pooling, and database initialization.
 """
 import contextlib
+import asyncio
 from typing import AsyncGenerator
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
@@ -11,7 +12,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import text
 
 from rahasya.config import Settings
-from rahasya.storage.sql_models import BaseSQLModel
 
 
 class AsyncDatabaseManager:
@@ -55,15 +55,21 @@ class AsyncDatabaseManager:
         )
 
     async def init_db(self) -> None:
-        """Create all tables in the database."""
+        """Apply versioned Alembic migrations to the configured database."""
         if self._engine is None:
             raise RuntimeError("DatabaseManager not initialized. Call initialize() first.")
             
-        logger.info("Creating database tables if they do not exist.")
+        logger.info("Applying database migrations.")
         try:
-            async with self._engine.begin() as conn:
-                await conn.run_sync(BaseSQLModel.metadata.create_all)
-            logger.info("Database tables created successfully.")
+            from alembic import command
+            from alembic.config import Config
+
+            def upgrade():
+                alembic_config = Config("alembic.ini")
+                command.upgrade(alembic_config, "head")
+
+            await asyncio.to_thread(upgrade)
+            logger.info("Database migrations applied successfully.")
         except SQLAlchemyError as e:
             logger.error(f"Failed to create database tables: {e}")
             raise

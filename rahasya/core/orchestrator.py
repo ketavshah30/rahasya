@@ -34,6 +34,9 @@ from rahasya.utils.logging import get_logger
 from rahasya.utils.validators import (
     normalize_email, normalize_phone, generate_username_variants, normalize_name,
 )
+from rahasya.storage.scan_store import ScanStore
+from rahasya.metrics import ACTIVE_SCANS, SCANS_COMPLETED, SCANS_STARTED
+from rahasya.storage.network_audit import record_audit_event
 
 
 class Orchestrator:
@@ -50,7 +53,10 @@ class Orchestrator:
             config: Application settings. Defaults to global settings.
         """
         self.config = config or settings
-        self.event_bus = EventBus()
+        self.event_bus = EventBus(
+            self.config.redis.url,
+            redis_enabled=self.config.redis.pubsub_enabled,
+        )
         self.graph = GraphManager(self.config)
         self.resolver = EntityResolver(self.graph, self.config)
         self.module_registry = ModuleRegistry(self.config)
@@ -58,10 +64,12 @@ class Orchestrator:
 
         # Per-scan tracking
         self._scan_state: Dict[str, dict] = {}
+        self._tasks: Dict[str, asyncio.Task] = {}
+        self.scan_store = ScanStore(self.config.storage.scan_dir)
         self.entities: List[Entity] = []
         self._visited_entities: Set[Tuple[str, str]] = set()
 
-    async def start_scan(self, request: ScanRequest) -> str:
+    async def start_scan(self, request: ScanRequest, scan_id: Optional[str] = None) -> str:
         """Initialize and run a full OSINT scan.
 
         Args:
@@ -70,12 +78,15 @@ class Orchestrator:
         Returns:
             Unique scan ID string.
         """
-        scan_id = str(uuid.uuid4())
+        scan_id = scan_id or str(uuid.uuid4())
 
         # Initialize scan state
         self._scan_state[scan_id] = {
             "request": request,
             "start_time": time.monotonic(),
+            "started_at": datetime.now(timezone.utc),
+            "completed_at": None,
+            "error": None,
             "entity_count": 0,
             "visited": set(),  # (entity_type, normalized_value) tuples
             "entities": [],
@@ -86,6 +97,18 @@ class Orchestrator:
         }
 
         self.logger.info(f"Starting scan {scan_id[:8]}...")
+        self._audit(
+            scan_id,
+            "scan_started",
+            outcome="started",
+            source_module="orchestrator",
+            message="Scan entered the orchestrator",
+            request_fields=[key for key, value in request.model_dump().items() if value not in (None, "")],
+        )
+        if SCANS_STARTED:
+            SCANS_STARTED.inc()
+        if ACTIVE_SCANS:
+            ACTIVE_SCANS.inc()
         await self.event_bus.publish(Event(
             type=EventType.SCAN_STARTED,
             payload={"scan_id": scan_id, "request": request.model_dump()},
@@ -105,8 +128,13 @@ class Orchestrator:
             self._scan_state[scan_id]["relationships"].append(rel)
             await self.graph.add_edge(rel.source_id, rel.target_id, rel)
 
+        self._persist_state(scan_id, depth=0, module=None)
+
         # Run the processing loop
-        asyncio.create_task(self._run_scan_loop(scan_id, seeds))
+        self._tasks[scan_id] = asyncio.create_task(
+            self._run_scan_loop(scan_id, registered_seeds),
+            name=f"rahasya-scan-{scan_id}",
+        )
 
         return scan_id
 
@@ -132,18 +160,28 @@ class Orchestrator:
                 elapsed = time.monotonic() - state["start_time"]
                 if elapsed >= max_time:
                     self.logger.warning(f"Scan {scan_id[:8]} hit time limit ({max_time}s)")
+                    self._audit(scan_id, "scan_limit", outcome="stopped", limit="time", limit_value=max_time)
                     break
 
                 # Check entity limit
                 if state["entity_count"] >= max_entities:
                     self.logger.warning(f"Scan {scan_id[:8]} hit entity limit ({max_entities})")
+                    self._audit(scan_id, "scan_limit", outcome="stopped", limit="entities", limit_value=max_entities)
                     break
 
                 self.logger.info(
                     f"Processing depth {current_depth}: {len(queue)} entities in queue"
                 )
+                self._audit(
+                    scan_id,
+                    "depth_started",
+                    outcome="started",
+                    depth=current_depth,
+                    queue_size=len(queue),
+                )
 
                 next_queue: List[Entity] = []
+                self._persist_state(scan_id, depth=current_depth, module=None)
 
                 for entity in queue:
                     # Recheck limits
@@ -163,9 +201,18 @@ class Orchestrator:
                         f"[{entity.entity_type.value}] '{entity.value}'"
                     )
 
+                    module_names = ", ".join(module.name for module in modules)
+                    self._persist_state(scan_id, depth=current_depth, module=module_names)
+
                     # Execute all applicable modules in parallel
                     results = await asyncio.gather(
-                        *[mod.safe_execute(entity, scan_id) for mod in modules],
+                        *[
+                            asyncio.wait_for(
+                                mod.safe_execute(entity, scan_id),
+                                timeout=self.config.scan.module_timeout_seconds,
+                            )
+                            for mod in modules
+                        ],
                         return_exceptions=True,
                     )
 
@@ -174,6 +221,19 @@ class Orchestrator:
                     for i, result in enumerate(results):
                         state["modules_run"] += 1
                         if isinstance(result, Exception):
+                            module_name = modules[i].name if i < len(modules) else "unknown"
+                            is_timeout = isinstance(result, (asyncio.TimeoutError, TimeoutError))
+                            self._audit(
+                                scan_id,
+                                "module_timeout" if is_timeout else "module_exception",
+                                outcome="timeout" if is_timeout else "failed",
+                                source_module=module_name,
+                                entity_type=entity.entity_type.value,
+                                entity_value=entity.value,
+                                timeout_seconds=self.config.scan.module_timeout_seconds if is_timeout else None,
+                                error_type=type(result).__name__,
+                                error=str(result),
+                            )
                             self.logger.error(
                                 f"Module failed: {type(result).__name__}: {result}"
                             )
@@ -187,7 +247,8 @@ class Orchestrator:
                         new_entity.parent_entity_id = entity.id
 
                         if await self._register_entity(scan_id, new_entity):
-                            next_queue.append(new_entity)
+                            if new_entity.confidence >= self.config.scan.confidence_threshold:
+                                next_queue.append(new_entity)
 
                             # Create parent-child relationship
                             rel = Relationship(
@@ -213,6 +274,8 @@ class Orchestrator:
                                 rel.source_id, rel.target_id, rel
                             )
 
+                    self._persist_state(scan_id, depth=current_depth, module=None)
+
                     # Publish progress
                     await self.event_bus.publish(Event(
                         type=EventType.SCAN_PROGRESS,
@@ -226,8 +289,18 @@ class Orchestrator:
                 queue = next_queue
                 current_depth += 1
                 state["depth_reached"] = current_depth
+                self._audit(
+                    scan_id,
+                    "depth_completed",
+                    outcome="success",
+                    depth=current_depth - 1,
+                    entity_count=state["entity_count"],
+                    relationship_count=len(state["relationships"]),
+                )
+                self._persist_state(scan_id, depth=current_depth, module=None)
 
             state["status"] = ScanStatus.COMPLETED
+            state["completed_at"] = datetime.now(timezone.utc)
             self.logger.info(
                 f"Scan {scan_id[:8]} completed: "
                 f"{state['entity_count']} entities, "
@@ -237,16 +310,48 @@ class Orchestrator:
 
         except asyncio.CancelledError:
             state["status"] = ScanStatus.CANCELLED
+            state["completed_at"] = datetime.now(timezone.utc)
+            self._audit(scan_id, "scan_cancelled", outcome="cancelled", source_module="orchestrator")
             self.logger.warning(f"Scan {scan_id[:8]} was cancelled")
         except Exception as e:
             state["status"] = ScanStatus.FAILED
+            state["completed_at"] = datetime.now(timezone.utc)
+            state["error"] = f"{type(e).__name__}: {e}"
+            self._audit(
+                scan_id,
+                "scan_failed",
+                outcome="failed",
+                source_module="orchestrator",
+                error_type=type(e).__name__,
+                error=str(e),
+            )
             self.logger.error(f"Scan {scan_id[:8]} failed: {e}", exc_info=True)
         finally:
-            elapsed = time.monotonic() - state["start_time"]
+            self._persist_state(scan_id, depth=state["depth_reached"], module=None)
+            await asyncio.gather(
+                *(module.teardown() for module in self.module_registry._instances.values()),
+                return_exceptions=True,
+            )
             await self.event_bus.publish(Event(
                 type=EventType.SCAN_COMPLETED,
                 payload={"scan_id": scan_id, "status": state["status"].value},
             ))
+            self._audit(
+                scan_id,
+                "scan_completed",
+                outcome=state["status"].value.casefold(),
+                source_module="orchestrator",
+                entity_count=state["entity_count"],
+                relationship_count=len(state["relationships"]),
+                modules_run=state["modules_run"],
+                depth_reached=state["depth_reached"],
+                duration_ms=round((time.monotonic() - state["start_time"]) * 1000, 2),
+            )
+            if SCANS_COMPLETED:
+                SCANS_COMPLETED.labels(status=state["status"].value).inc()
+            if ACTIVE_SCANS:
+                ACTIVE_SCANS.dec()
+            await self.event_bus.close()
 
     async def _register_entity(self, scan_id: str, entity: Entity) -> bool:
         """Register a new entity if not already visited.
@@ -270,6 +375,21 @@ class Orchestrator:
 
         # Add to graph
         await self.graph.add_node(entity)
+
+        self._audit(
+            scan_id,
+            "entity_registered",
+            outcome="success",
+            source_module=entity.source_module,
+            entity_id=entity.id,
+            entity_type=entity.entity_type.value,
+            entity_value=entity.value,
+            confidence=entity.confidence,
+            depth=entity.depth,
+            parent_entity_id=entity.parent_entity_id,
+        )
+
+        self._persist_state(scan_id, depth=state["depth_reached"], module=None)
 
         return True
 
@@ -472,7 +592,7 @@ class Orchestrator:
         """
         state = self._scan_state.get(scan_id)
         if not state:
-            return ScanResult(scan_id=scan_id, status=ScanStatus.PENDING)
+            return self.scan_store.load(scan_id) or ScanResult(scan_id=scan_id, status=ScanStatus.PENDING)
 
         elapsed = time.monotonic() - state["start_time"]
 
@@ -485,12 +605,8 @@ class Orchestrator:
         return ScanResult(
             scan_id=scan_id,
             status=state["status"],
-            started_at=datetime.now(timezone.utc),
-            completed_at=(
-                datetime.now(timezone.utc)
-                if state["status"] in (ScanStatus.COMPLETED, ScanStatus.FAILED)
-                else None
-            ),
+            started_at=state["started_at"],
+            completed_at=state["completed_at"],
             entities=state["entities"],
             relationships=state["relationships"],
             stats=ScanStats(
@@ -501,6 +617,42 @@ class Orchestrator:
                 depth_reached=state["depth_reached"],
                 duration_seconds=elapsed,
             ),
+            request=state["request"],
+            error=state["error"],
+        )
+
+    def _persist_state(self, scan_id: str, *, depth: int, module: Optional[str]) -> None:
+        """Write an atomic snapshot and lightweight progress event."""
+        result = self.get_scan_result(scan_id)
+        self.scan_store.save(result)
+        self.scan_store.save_status(
+            scan_id,
+            status=result.status.value,
+            depth=depth,
+            module=module,
+            entity_count=result.stats.total_entities,
+            relationship_count=result.stats.total_relationships,
+            modules_run=result.stats.modules_run,
+            max_depth=self.config.scan.max_depth,
+            max_entities=self.config.scan.max_entities,
+        )
+
+    def _audit(
+        self,
+        scan_id: str,
+        event_type: str,
+        *,
+        outcome: str,
+        source_module: str = "orchestrator",
+        **details,
+    ) -> None:
+        record_audit_event(
+            event_type,
+            outcome=outcome,
+            scan_id=scan_id,
+            source_module=source_module,
+            root=self.config.storage.scan_dir,
+            **details,
         )
 
     async def cancel_scan(self, scan_id: str) -> None:
@@ -511,8 +663,16 @@ class Orchestrator:
         """
         if scan_id in self._scan_state:
             self._scan_state[scan_id]["status"] = ScanStatus.CANCELLED
-            # Force limits to stop the loop
-            self._scan_state[scan_id]["entity_count"] = (
-                self.config.scan.max_entities + 1
+            task = self._tasks.get(scan_id)
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            self._persist_state(
+                scan_id,
+                depth=self._scan_state[scan_id]["depth_reached"],
+                module=None,
             )
             self.logger.info(f"Scan {scan_id[:8]} cancellation requested")

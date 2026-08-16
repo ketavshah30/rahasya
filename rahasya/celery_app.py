@@ -12,8 +12,8 @@ settings = Settings()
 # Create Celery application
 app = Celery(
     'rahasya',
-    broker=settings.celery.broker_url.unicode_string() if settings.celery.broker_url else 'redis://localhost:6379/0',
-    backend=settings.celery.result_backend.unicode_string() if settings.celery.result_backend else 'redis://localhost:6379/0',
+    broker=settings.celery.broker_url or 'redis://localhost:6379/0',
+    backend=settings.celery.result_backend or 'redis://localhost:6379/0',
     include=[
         'rahasya.tasks.scan_tasks',
         'rahasya.tasks.discovery_tasks'
@@ -64,6 +64,14 @@ app.conf.beat_schedule = {
 def setup_periodic_tasks(sender, **kwargs):
     """Setup periodic tasks for Celery Beat."""
     logger.info("Celery beat schedule configured.")
+
+
+@app.on_after_finalize.connect
+def start_worker_metrics(sender, **kwargs):
+    """Expose Prometheus worker metrics when RAHASYA_METRICS_PORT is set."""
+    from rahasya.metrics import start_metrics_server
+
+    start_metrics_server()
 
 if __name__ == '__main__':
     app.start()

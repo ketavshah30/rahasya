@@ -1,7 +1,7 @@
 import asyncio
 import time
 import functools
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 from loguru import logger
 
 try:

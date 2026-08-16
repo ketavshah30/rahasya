@@ -1,9 +1,12 @@
 import asyncio
 import random
+import time
 from typing import Optional, Dict, Any
 from loguru import logger
 
 import httpx
+
+from rahasya.storage.network_audit import record_audit_event
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -15,14 +18,20 @@ USER_AGENTS = [
 
 class StealthHTTPClient:
     """Resilient HTTP client with anti-detection features."""
-    def __init__(self, proxy: Optional[str] = None, timeout: float = 30.0, max_retries: int = 3):
+    def __init__(
+        self,
+        proxy: Optional[str] = None,
+        timeout: float = 30.0,
+        max_retries: int = 3,
+        ssl_verify: bool = True,
+    ):
         self.proxy = proxy
         self.timeout = timeout
         self.max_retries = max_retries
         self._client = httpx.AsyncClient(
             proxy=proxy,
             timeout=timeout,
-            verify=False
+            verify=ssl_verify,
         )
 
     def _get_headers(self, custom_headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
@@ -45,14 +54,54 @@ class StealthHTTPClient:
         await asyncio.sleep(random.uniform(0.5, 2.0))
         
         for attempt in range(self.max_retries):
+            request_started = time.monotonic()
+            response_recorded = False
             try:
                 kwargs["headers"] = self._get_headers(kwargs.get("headers"))
                 response = await self._client.request(method, url, **kwargs)
+                duration_ms = round((time.monotonic() - request_started) * 1000, 2)
+                if response.status_code == 429:
+                    outcome = "rate_limited"
+                elif response.status_code >= 400:
+                    outcome = "http_error"
+                else:
+                    outcome = "success"
+                record_audit_event(
+                    "network_request",
+                    outcome=outcome,
+                    url=str(response.request.url),
+                    method=method.upper(),
+                    status_code=response.status_code,
+                    duration_ms=duration_ms,
+                    attempt=attempt + 1,
+                    max_attempts=self.max_retries,
+                    via_proxy=bool(self.proxy),
+                )
+                response_recorded = True
                 response.raise_for_status()
                 return response
             except (httpx.RequestError, httpx.HTTPStatusError) as e:
+                if not response_recorded:
+                    record_audit_event(
+                        "network_request",
+                        outcome="failed",
+                        url=url,
+                        method=method.upper(),
+                        duration_ms=round((time.monotonic() - request_started) * 1000, 2),
+                        attempt=attempt + 1,
+                        max_attempts=self.max_retries,
+                        via_proxy=bool(self.proxy),
+                        error_type=type(e).__name__,
+                        error=str(e),
+                    )
                 logger.warning(f"Attempt {attempt+1}/{self.max_retries} failed for {url}: {e}")
                 last_exception = e
+                if (
+                    isinstance(e, httpx.HTTPStatusError)
+                    and 400 <= e.response.status_code < 500
+                    and e.response.status_code != 429
+                ):
+                    raise
                 if attempt < self.max_retries - 1:
                     await asyncio.sleep(delay)
                     delay *= 2  # Exponential backoff
@@ -75,8 +124,13 @@ class StealthHTTPClient:
 
 class TorHTTPClient(StealthHTTPClient):
     """HTTP Client that routes traffic through Tor SOCKS5 proxy."""
-    def __init__(self, tor_proxy: str = "socks5://127.0.0.1:9050", timeout: float = 60.0):
-        super().__init__(proxy=tor_proxy, timeout=timeout)
+    def __init__(
+        self,
+        tor_proxy: str = "socks5://127.0.0.1:9050",
+        timeout: float = 60.0,
+        ssl_verify: bool = True,
+    ):
+        super().__init__(proxy=tor_proxy, timeout=timeout, ssl_verify=ssl_verify)
         logger.info(f"Initialized TorHTTPClient via {tor_proxy}")
 
 
@@ -98,6 +152,7 @@ class PlaywrightClient:
 
     async def get(self, url: str) -> str:
         """Returns the rendered HTML content of the page."""
+        started = time.monotonic()
         await self._init_browser()
         page = await self._browser.new_page(
             user_agent=random.choice(USER_AGENTS)
@@ -105,7 +160,27 @@ class PlaywrightClient:
         try:
             await page.goto(url, wait_until="networkidle")
             content = await page.content()
+            record_audit_event(
+                "network_request",
+                outcome="success",
+                url=url,
+                method="BROWSER_GET",
+                duration_ms=round((time.monotonic() - started) * 1000, 2),
+                browser="playwright",
+            )
             return content
+        except Exception as exc:
+            record_audit_event(
+                "network_request",
+                outcome="failed",
+                url=url,
+                method="BROWSER_GET",
+                duration_ms=round((time.monotonic() - started) * 1000, 2),
+                browser="playwright",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            raise
         finally:
             await page.close()
 

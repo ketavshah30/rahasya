@@ -2,10 +2,10 @@ import asyncio
 import json
 import os
 from typing import List, Dict, Any, Optional
+from urllib.parse import quote_plus
 
 from rahasya.modules.base import BaseModule
 from rahasya.core.models import Entity, EntityType, SourceReliability, SocialProfileEntity
-from rahasya.utils.http_client import StealthHTTPClient
 
 class WhatsMyNameModule(BaseModule):
     name = "WhatsMyName"
@@ -20,7 +20,6 @@ class WhatsMyNameModule(BaseModule):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.sites_data = None
-        self.http_client = StealthHTTPClient()
         
     async def initialize(self):
         # Setup cache dir
@@ -45,7 +44,8 @@ class WhatsMyNameModule(BaseModule):
                 self.logger.error(f"Failed to fetch WhatsMyName data: {e}")
                 
     async def check_site(self, site: Dict[str, Any], target: str) -> Optional[SocialProfileEntity]:
-        url = site.get("uri_check", "").replace("{account}", target)
+        encoded_target = quote_plus(target)
+        url = site.get("uri_check", "").replace("{account}", encoded_target)
         if not url:
             return None
             
@@ -67,7 +67,7 @@ class WhatsMyNameModule(BaseModule):
                     is_valid = False
                     
             if is_valid:
-                profile_url = site.get("uri_pretty", url).replace("{account}", target)
+                profile_url = site.get("uri_pretty", url).replace("{account}", encoded_target)
                 return SocialProfileEntity(
                     entity_type=EntityType.SOCIAL_PROFILE,
                     value=profile_url,

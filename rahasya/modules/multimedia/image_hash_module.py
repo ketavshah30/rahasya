@@ -8,6 +8,10 @@ try:
     import imagehash
 except ImportError:
     imagehash = None
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 
 from rahasya.modules.base import BaseModule
 from rahasya.core.models import Entity, EntityType, SourceReliability, PhotoEntity
@@ -36,10 +40,19 @@ class ImageHashModule(BaseModule):
                 with Image.open(file_path) as img:
                     phash = str(imagehash.phash(img))
                     dhash = str(imagehash.dhash(img))
-                    ahash = str(imagehash.average_hash(img))
-                    return phash, dhash, ahash
+                    whash = str(imagehash.whash(img))
+                face_count = 0
+                if cv2 is not None:
+                    pixels = cv2.imread(file_path)
+                    if pixels is not None:
+                        gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
+                        cascade = cv2.CascadeClassifier(
+                            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+                        )
+                        face_count = len(cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5))
+                return phash, dhash, whash, face_count
                     
-            phash_val, dhash_val, ahash_val = await asyncio.to_thread(compute_hashes)
+            phash_val, dhash_val, whash_val, face_count = await asyncio.to_thread(compute_hashes)
             
             # Create a new PhotoEntity with hashes in metadata and phash field
             photo_ent = PhotoEntity(
@@ -52,12 +65,16 @@ class ImageHashModule(BaseModule):
                 metadata={
                     "phash": phash_val,
                     "dhash": dhash_val,
-                    "ahash": ahash_val
+                    "whash": whash_val,
+                    "face_count": face_count,
                 },
                 parent_entity_id=entity.id,
                 depth=entity.depth + 1,
                 file_path=file_path,
-                phash=phash_val
+                phash=phash_val,
+                dhash=dhash_val,
+                whash=whash_val,
+                face_count=face_count,
             )
             results.append(photo_ent)
             

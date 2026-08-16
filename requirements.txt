@@ -39,6 +39,7 @@ requests[socks]>=2.31
 
 # Dashboard
 streamlit>=1.32
+streamlit-autorefresh>=1.0.1
 pyvis>=0.3
 streamlit-agraph>=0.0.45
 plotly>=5.18
@@ -47,6 +48,7 @@ plotly>=5.18
 celery[redis]>=5.3
 redis>=5.0
 flower>=2.0
+prometheus-client>=0.20
 
 # Anti-detection
 playwright>=1.40

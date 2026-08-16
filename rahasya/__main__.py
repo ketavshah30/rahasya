@@ -173,7 +173,7 @@ def scan(name, email, phone, username, photo, location, dob, age_range,
 
 @cli.command()
 def dashboard() -> None:
-    """Launch the Streamlit Kundli Dashboard."""
+    """Launch the Streamlit CIA Web dashboard."""
     import subprocess
     app_path = os.path.join(os.path.dirname(__file__), "dashboard", "app.py")
 
@@ -213,7 +213,7 @@ def worker(concurrency) -> None:
             ["celery", "-A", "rahasya.celery_app", "worker",
              f"--concurrency={concurrency}",
              "--loglevel=info",
-             "-Q", "default,discovery,correlation"],
+             "-Q", "default,orchestration,discovery,social,breach,darkweb,correlation"],
             check=True,
         )
     except FileNotFoundError:
@@ -228,7 +228,7 @@ def worker(concurrency) -> None:
 
 @cli.command("init-db")
 def init_db() -> None:
-    """Initialize the database schema (create all tables)."""
+    """Upgrade the database schema using Alembic migrations."""
     console.print("[bold cyan]Initializing Rahasya database...[/bold cyan]")
 
     async def _init():
@@ -236,14 +236,14 @@ def init_db() -> None:
         from rahasya.config import settings
         db_manager.initialize(settings)
         await db_manager.init_db()
-        console.print("[bold green]✓ Database tables created successfully.[/bold green]")
+        console.print("[bold green]Database migrations applied successfully.[/bold green]")
         await db_manager.close_db()
 
     try:
         asyncio.run(_init())
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
-        console.print("[dim]Make sure PostgreSQL is running and DATABASE_URL is set in .env[/dim]")
+        console.print("[dim]Make sure PostgreSQL is running and DB__URL is set in .env[/dim]")
         sys.exit(1)
 
 

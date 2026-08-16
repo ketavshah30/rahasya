@@ -1,4 +1,5 @@
 import asyncio
+import json
 from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -29,9 +30,12 @@ class Event:
 class EventBus:
     """Production pub/sub event system."""
     
-    def __init__(self):
+    def __init__(self, redis_url: str | None = None, redis_enabled: bool = False):
         self._subscribers: Dict[Union[EventType, str], List[Callable]] = {}
         self._lock = asyncio.Lock()
+        self._redis_url = redis_url
+        self._redis_enabled = redis_enabled
+        self._redis = None
 
     async def subscribe(self, event_type: Union[EventType, str], callback: Callable):
         """Subscribe to a specific event type or '*' for all events."""
@@ -65,3 +69,26 @@ class EventBus:
                     callback(event)
             except Exception as e:
                 logger.error(f"Error in event callback for {event.type}: {e}")
+
+        if self._redis_enabled and self._redis_url:
+            try:
+                if self._redis is None:
+                    from redis.asyncio import Redis
+
+                    self._redis = Redis.from_url(self._redis_url)
+                await self._redis.publish(
+                    "rahasya.events",
+                    json.dumps({
+                        "type": event.type.value,
+                        "payload": event.payload,
+                        "source_module": event.source_module,
+                        "timestamp": event.timestamp.isoformat(),
+                    }, default=str),
+                )
+            except Exception as exc:
+                logger.warning(f"Redis event publish failed: {exc}")
+
+    async def close(self):
+        if self._redis is not None:
+            await self._redis.aclose()
+            self._redis = None

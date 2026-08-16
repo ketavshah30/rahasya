@@ -9,6 +9,7 @@ from rahasya.config import (
     RedisSettings,
     ScanSettings,
     Settings,
+    StorageSettings,
     TorSettings,
     settings,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "RedisSettings",
     "ScanSettings",
     "Settings",
+    "StorageSettings",
     "TorSettings",
     "settings",
 ]

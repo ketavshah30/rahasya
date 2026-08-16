@@ -55,7 +55,7 @@ class ModuleRegistry:
         return self._instances[key]
 
     def get_modules_for(self, entity_type: EntityType) -> List[BaseModule]:
-        """Return available module instances that accept the given entity type."""
+        """Return compatible modules; unavailable ones self-report as skipped."""
         modules: List[BaseModule] = []
         for module_class in self.__class__._module_classes.values():
             accepts = getattr(
@@ -64,9 +64,7 @@ class ModuleRegistry:
                 getattr(module_class, "supported_entity_types", []),
             )
             if entity_type in accepts:
-                module = self._get_instance(module_class)
-                if module.is_available():
-                    modules.append(module)
+                modules.append(self._get_instance(module_class))
         return modules
 
     def get_modules_for_entity_type(self, entity_type: EntityType) -> List[BaseModule]:

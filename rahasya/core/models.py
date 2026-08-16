@@ -1,4 +1,5 @@
 from enum import Enum
+import re
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -21,6 +22,10 @@ class EntityType(str, Enum):
     LOCATION = "location"
     DOMAIN = "domain"
     LEAK_RECORD = "leak_record"
+    PARTIAL_EMAIL = "partial_email"
+    PARTIAL_PHONE = "partial_phone"
+    COMPANY = "company"
+    TIMELINE_EVENT = "timeline_event"
 
 
 class SourceReliability(str, Enum):
@@ -88,6 +93,29 @@ class PhoneEntity(Entity):
         return self
 
 
+class _PartialValueMixin:
+    """Match provider-masked recovery hints without exposing secret data."""
+
+    normalized_value: str
+
+    def matches_pattern(self, known_value: str) -> bool:
+        masked = self.normalized_value.casefold().strip()
+        known = known_value.casefold().strip()
+        if not masked or not known:
+            return False
+        wildcarded = re.sub(r"[\u2022*·xX]+", "*", masked)
+        expression = "".join(".*" if char == "*" else re.escape(char) for char in wildcarded)
+        return re.fullmatch(expression, known) is not None
+
+
+class PartialEmailEntity(_PartialValueMixin, Entity):
+    entity_type: EntityType = EntityType.PARTIAL_EMAIL
+
+
+class PartialPhoneEntity(_PartialValueMixin, Entity):
+    entity_type: EntityType = EntityType.PARTIAL_PHONE
+
+
 class UsernameEntity(Entity):
     entity_type: EntityType = EntityType.USERNAME
     handle: str = ""
@@ -136,6 +164,8 @@ class PhotoEntity(Entity):
     entity_type: EntityType = EntityType.PHOTO
     file_path: str
     phash: Optional[str] = None
+    dhash: Optional[str] = None
+    whash: Optional[str] = None
     exif_data: Dict[str, Any] = Field(default_factory=dict)
     face_count: int = 0
     gps_coords: Optional[str] = None
@@ -149,6 +179,29 @@ class LocationEntity(Entity):
     state: Optional[str] = None
     country: Optional[str] = None
     source_type: Optional[str] = None
+
+
+class CompanyEntity(Entity):
+    entity_type: EntityType = EntityType.COMPANY
+    name: Optional[str] = None
+    domain: Optional[str] = None
+
+
+class TimelineEvent(Entity):
+    entity_type: EntityType = EntityType.TIMELINE_EVENT
+    event_type: str
+    occurred_at: datetime
+    subject_entity_id: Optional[str] = None
+    source_url: Optional[str] = None
+
+
+class PersonCluster(BaseModel):
+    """A resolved real-world person represented by multiple identifiers."""
+
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    entity_ids: List[str] = Field(default_factory=list)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    evidence: List[str] = Field(default_factory=list)
 
 
 class RelationshipType(str, Enum):
@@ -165,6 +218,15 @@ class RelationshipType(str, Enum):
     WORKS_AT = "WORKS_AT"
     KNOWS = "KNOWS"
     LINKED_TO = "LINKED_TO"
+    SHARES_RECOVERY = "SHARES_RECOVERY"
+    PARENT_OF = "PARENT_OF"
+    SIBLING_OF = "SIBLING_OF"
+    SPOUSE_OF = "SPOUSE_OF"
+    WORKS_WITH = "WORKS_WITH"
+    MENTIONS = "MENTIONS"
+    ALT_ACCOUNT_OF = "ALT_ACCOUNT_OF"
+    EMPLOYED_AT = "EMPLOYED_AT"
+    LIKELY_SAME = "LIKELY_SAME"
 
 
 class Relationship(BaseModel):
@@ -242,6 +304,8 @@ class ScanResult(BaseModel):
     entities: List[Entity] = Field(default_factory=list)
     relationships: List[Relationship] = Field(default_factory=list)
     stats: ScanStats = Field(default_factory=ScanStats)
+    request: Optional[ScanRequest] = None
+    error: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod

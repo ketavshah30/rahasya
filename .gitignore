@@ -20,6 +20,7 @@ var/
 .installed.cfg
 *.egg
 .pytest_cache/
+.pytest_tmp/
 .coverage
 htmlcov/
 venv/
@@ -36,4 +37,5 @@ ENV/
 .env
 data/cache/
 data/reports/
+data/scans/
 *.db

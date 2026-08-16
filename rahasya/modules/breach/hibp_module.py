@@ -1,9 +1,9 @@
 import asyncio
 from typing import List
+from urllib.parse import quote_plus
 
 from rahasya.modules.base import BaseModule
 from rahasya.core.models import Entity, EntityType, SourceReliability, BreachRecord
-from rahasya.utils.http_client import StealthHTTPClient
 
 class HIBPModule(BaseModule):
     name = "HIBP"
@@ -14,14 +14,10 @@ class HIBPModule(BaseModule):
     
     BASE_URL = "https://haveibeenpwned.com/api/v3"
     
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.http_client = StealthHTTPClient()
-        
     async def execute(self, entity: Entity, scan_id: str) -> List[Entity]:
         results = []
         email = entity.value
-        api_key = getattr(self.config.api_keys, "hibp", None)
+        api_key = self._get_api_key()
         
         if not api_key:
             self.logger.warning("HIBP API key not configured")
@@ -34,7 +30,8 @@ class HIBPModule(BaseModule):
         
         try:
             # 1. Breached accounts
-            breach_url = f"{self.BASE_URL}/breachedaccount/{email}?truncateResponse=false"
+            encoded_email = quote_plus(email)
+            breach_url = f"{self.BASE_URL}/breachedaccount/{encoded_email}?truncateResponse=false"
             breach_resp = await self.http_client.get(breach_url, headers=headers)
             
             if breach_resp.status_code == 200:
@@ -59,6 +56,9 @@ class HIBPModule(BaseModule):
                     results.append(record)
             elif breach_resp.status_code == 429:
                 self.logger.warning("HIBP API rate limited")
+                replacement = self.rotate_api_key()
+                if replacement and replacement != api_key:
+                    headers["hibp-api-key"] = replacement
             elif breach_resp.status_code == 401:
                 self.logger.error("HIBP API key invalid")
                 
@@ -66,7 +66,7 @@ class HIBPModule(BaseModule):
             await asyncio.sleep(2)
             
             # 2. Paste accounts
-            paste_url = f"{self.BASE_URL}/pasteaccount/{email}"
+            paste_url = f"{self.BASE_URL}/pasteaccount/{encoded_email}"
             paste_resp = await self.http_client.get(paste_url, headers=headers)
             
             if paste_resp.status_code == 200:
@@ -97,4 +97,4 @@ class HIBPModule(BaseModule):
 
     def is_available(self) -> bool:
         """HIBP requires an API key to function."""
-        return bool(getattr(self.config.api_keys, "hibp", None))
+        return bool(self._get_api_key())

@@ -17,6 +17,7 @@ graph TD
     F --> H
     G --> H
     H --> I[Dashboard]
+    H --> S[(On-disk ScanStore)]
     H -.-> J[(PostgreSQL)]
     H -.-> K[(Redis)]
     H -.-> L[(Neo4j - Optional)]
@@ -24,9 +25,10 @@ graph TD
 
 ## Features
 - Recursive discovery (BFS with depth/entity/time limits)
+- Durable scan snapshots and live progress that survive refreshes and page switches
 - 12+ OSINT modules (Maigret, Sherlock, WhatsMyName, HIBP, IntelX, LeakLookup, Ahmia, OnionSearch, EXIF, ImageHash, Archive.org)
 - Entity resolution (fuzzy + deterministic)
-- Interactive Kundli graph visualization (PyVis)
+- Interactive CIA Web correlation visualization (PyVis)
 - Risk scoring and exposure analysis
 - Dark web monitoring (via Tor)
 - Celery + Redis task queue for async processing
@@ -71,26 +73,26 @@ python -m rahasya dashboard
 
 # Start Celery worker (for async scans)
 python -m rahasya worker
+
+# Or start the complete production-shaped stack
+docker compose up --build
 ```
 
 ## Configuration
 | Environment Variable | Description |
 | --- | --- |
-| `DATABASE_URL` | PostgreSQL connection string |
-| `REDIS_URL` | Redis connection string for Celery |
-| `HIBP_API_KEY` | HaveIBeenPwned API key (Optional) |
-| `INTELX_API_KEY` | IntelligenceX API key (Optional) |
-| `DEHASHED_API_KEY` | DeHashed API key (Optional) |
-| `LEAKLOOKUP_API_KEY` | LeakLookup API key (Optional) |
-| `NEO4J_URI` | Neo4j connection URI (Optional) |
-| `NEO4J_USER` | Neo4j username (Optional) |
-| `NEO4J_PASSWORD` | Neo4j password (Optional) |
-| `TOR_SOCKS_PORT` | Tor SOCKS port (Optional) |
-| `TOR_CONTROL_PORT` | Tor Control port (Optional) |
-| `TOR_PASSWORD` | Tor password (Optional) |
-| `MAX_RECURSION_DEPTH` | Maximum depth for recursive OSINT |
-| `MAX_ENTITIES` | Maximum number of entities to discover |
-| `MAX_SCAN_MINUTES` | Maximum scan duration |
+| `DB__URL` | PostgreSQL connection string |
+| `REDIS__URL` | Redis event connection string |
+| `CELERY__BROKER_URL` | Celery broker connection string |
+| `CELERY__ENABLED` | Dispatch dashboard scans to workers instead of local threads |
+| `API_KEYS__HIBP` | HaveIBeenPwned API key (optional) |
+| `API_KEYS__INTELX` | IntelligenceX API key (optional) |
+| `NEO4J__URI` | Neo4j connection URI (optional) |
+| `TOR__SOCKS_PORT` | Tor SOCKS port (optional) |
+| `SCAN__MAX_DEPTH` | Maximum recursive depth |
+| `SCAN__MAX_ENTITIES` | Maximum entity count |
+| `SCAN__MAX_TIME_MINUTES` | Maximum scan duration |
+| `STORAGE__SCAN_DIR` | Durable JSON scan directory |
 | `LOG_LEVEL` | Application logging level |
 | `ENVIRONMENT` | Environment type (development/production) |
 | `DEBUG` | Debug mode toggle |
@@ -107,7 +109,7 @@ python -m rahasya worker
 The Rahasya dashboard features a CIA-terminal themed interface providing actionable insights. Key pages include:
 - **Scan Initialization**: Start targeted scans with minimal input.
 - **Entity Resolution**: View and merge discovered entities.
-- **Kundli Graph**: Interactive visual relationship mapping of digital footprints.
+- **CIA Web**: Interactive, filterable relationship mapping of digital footprints.
 - **Risk Assessment**: Actionable risk scores based on breach and exposure data.
 
 ## Project Structure

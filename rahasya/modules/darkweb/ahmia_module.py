@@ -1,9 +1,9 @@
 import asyncio
 from typing import List
+from urllib.parse import quote_plus
 
 from rahasya.modules.base import BaseModule
 from rahasya.core.models import Entity, EntityType, SourceReliability, DarkWebMention
-from rahasya.utils.http_client import StealthHTTPClient
 
 class AhmiaModule(BaseModule):
     name = "Ahmia"
@@ -14,16 +14,12 @@ class AhmiaModule(BaseModule):
     
     BASE_URL = "https://ahmia.fi/api/search/"
     
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.http_client = StealthHTTPClient()
-        
     async def execute(self, entity: Entity, scan_id: str) -> List[Entity]:
         results = []
         query = entity.value
         
         try:
-            url = f"{self.BASE_URL}?q={query}"
+            url = f"{self.BASE_URL}?q={quote_plus(query)}"
             resp = await self.http_client.get(url)
             
             if resp.status_code == 200:

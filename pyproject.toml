@@ -40,6 +40,7 @@ dependencies = [
     "requests[socks]>=2.31",
     # Dashboard
     "streamlit>=1.32",
+    "streamlit-autorefresh>=1.0.1",
     "pyvis>=0.3",
     "streamlit-agraph>=0.0.45",
     "plotly>=5.18",
@@ -47,6 +48,7 @@ dependencies = [
     "celery[redis]>=5.3",
     "redis>=5.0",
     "flower>=2.0",
+    "prometheus-client>=0.20",
     # Anti-detection
     "playwright>=1.40",
     "curl-cffi>=0.6",
@@ -66,8 +68,26 @@ dependencies = [
 test = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
-    "pytest-cov>=4.1"
+    "pytest-cov>=4.1",
+    "ruff>=0.6",
+    "mypy>=1.11"
 ]
 
 [project.scripts]
 rahasya = "rahasya.__main__:cli"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+check_untyped_defs = false
+warn_unused_ignores = false
+
+[tool.pytest.ini_options]
+addopts = "--basetemp=.pytest_tmp"

@@ -1,13 +1,14 @@
 import os
-from datetime import datetime
-
 import streamlit as st
 
 from rahasya.dashboard.state import (
+    SCAN_STORE,
+    autorefresh_running,
     ensure_dashboard_state,
-    result_to_dict,
-    run_scan,
+    get_current_result,
+    render_scan_detail_bar,
     save_uploaded_photo,
+    submit_background_scan,
 )
 
 
@@ -22,7 +23,7 @@ load_css()
 ensure_dashboard_state(st)
 
 st.markdown("<h1 class='neon-text'>INITIATE NEW SCAN</h1>", unsafe_allow_html=True)
-st.markdown("Enter target identifiers to run a real local Rahasya scan.")
+st.markdown("Enter target identifiers. The investigation continues in the background across page changes and refreshes.")
 
 with st.form("new_scan_form"):
     col1, col2 = st.columns(2)
@@ -52,7 +53,7 @@ with st.form("new_scan_form"):
             mod_multimedia = st.checkbox("Multimedia Analysis", value=True)
             confidence_threshold = st.slider("Min Confidence Score", 0.0, 1.0, 0.5)
 
-    submit_button = st.form_submit_button("INITIATE SCAN", use_container_width=True)
+    submit_button = st.form_submit_button("INITIATE SCAN", width="stretch")
 
 if submit_button:
     if not any([name, email, phone, username, photo, location]):
@@ -79,33 +80,24 @@ if submit_button:
             },
         }
 
-        with st.status("Running real Rahasya scan...", expanded=True) as status:
-            st.write(f"[{datetime.now().strftime('%H:%M:%S')}] Normalizing target inputs")
-            st.write(f"[{datetime.now().strftime('%H:%M:%S')}] Dispatching enabled modules")
-            result = run_scan(request_data)
-            st.write(f"[{datetime.now().strftime('%H:%M:%S')}] Scan finished with status {result.status.value}")
+        scan_id = submit_background_scan(request_data)
+        st.session_state.current_scan_id = scan_id
+        st.success(f"Investigation dispatched. ID: {scan_id}")
+        st.info("You can now open CIA Web, Timeline, Exposure Report, or Export; this scan will keep running.")
 
-            st.session_state.current_scan_id = result.scan_id
-            st.session_state.scan_results[result.scan_id] = result_to_dict(result)
-            st.session_state.scans[result.scan_id] = {
-                "status": result.status.value,
-                "targets": name or username or email or phone or location or "Unknown Target",
-                "progress": 100,
-                "entities": result.stats.total_entities,
-                "relationships": result.stats.total_relationships,
-            }
-            status.update(label="Scan complete", state="complete")
-
-        st.success(f"Scan complete. ID: {result.scan_id}")
-
-        metric_cols = st.columns(4)
-        metric_cols[0].metric("Status", result.status.value)
-        metric_cols[1].metric("Entities", result.stats.total_entities)
-        metric_cols[2].metric("Relationships", result.stats.total_relationships)
-        metric_cols[3].metric("Depth", result.stats.depth_reached)
-
-        if result.stats.by_type:
-            st.markdown("### Entity Breakdown")
-            st.json(result.stats.by_type)
-
-        st.info("Open Kundli Graph, Timeline, Exposure Report, or Export from the sidebar to view this scan.")
+active = get_current_result(st)
+if active is not None:
+    st.markdown("### Active investigation")
+    render_scan_detail_bar(st, "new_scan")
+    status = SCAN_STORE.load_status(active.scan_id) or {}
+    max_depth_value = max(1, int(status.get("max_depth") or 1))
+    depth_value = min(max_depth_value, int(status.get("depth") or 0))
+    entity_limit = max(1, int(status.get("max_entities") or 1))
+    entity_count = int(status.get("entity_count") or 0)
+    progress_value = max(depth_value / max_depth_value, min(0.99, entity_count / entity_limit))
+    if active.status.value in {"COMPLETED", "FAILED", "CANCELLED"}:
+        progress_value = 1.0
+    st.progress(progress_value, text=f"Depth {depth_value}/{max_depth_value} · {entity_count} entities")
+    if status.get("module"):
+        st.code(f"MODULES IN FLIGHT :: {status['module']}")
+    autorefresh_running(st, active, "new_scan")

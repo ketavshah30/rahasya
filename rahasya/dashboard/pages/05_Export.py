@@ -8,9 +8,11 @@ from rahasya.dashboard.state import (
     get_current_result,
     get_result_options,
     graph_payload,
-    result_from_dict,
+    render_scan_detail_bar,
     result_json,
+    SCAN_STORE,
 )
+from rahasya.storage.network_audit import NetworkAuditStore, audit_html_report
 
 
 def load_css():
@@ -24,6 +26,8 @@ load_css()
 
 st.markdown("<h1 class='neon-text'>DATA EXPORT</h1>", unsafe_allow_html=True)
 st.markdown("Export real scan results and intelligence reports.")
+
+render_scan_detail_bar(st, "export")
 
 options = get_result_options(st)
 if not options:
@@ -39,11 +43,11 @@ else:
 
     selected_label = st.selectbox("Available Scans", labels, index=labels.index(default_label))
     selected_scan_id = options[selected_label]
-    result = result_from_dict(st.session_state.scan_results[selected_scan_id])
+    result = SCAN_STORE.load(selected_scan_id)
 
     st.markdown("### Export Formats")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         st.markdown("""
@@ -57,7 +61,7 @@ else:
             data=build_html_report(result),
             file_name=f"rahasya_report_{result.scan_id[:8]}.html",
             mime="text/html",
-            use_container_width=True,
+            width="stretch",
         )
 
     with col2:
@@ -73,7 +77,7 @@ else:
             data=csv_data,
             file_name=f"rahasya_entities_{result.scan_id[:8]}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )
 
     with col3:
@@ -88,7 +92,24 @@ else:
             data=result_json(result),
             file_name=f"rahasya_scan_{result.scan_id[:8]}.json",
             mime="application/json",
-            use_container_width=True,
+            width="stretch",
+        )
+
+    with col4:
+        audit_events = NetworkAuditStore().load(result.scan_id)
+        st.markdown("""
+        <div class="glass-card" style="text-align: center;">
+            <h3 style="color: var(--primary-cyan)">Network Audit</h3>
+            <p style="font-size: 0.9em; color: var(--text-muted)">Sources visited, HTTP outcomes, provider checks, and errors.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        st.download_button(
+            "Download Audit HTML",
+            data=audit_html_report(result.scan_id, audit_events),
+            file_name=f"rahasya_network_audit_{result.scan_id[:8]}.html",
+            mime="text/html",
+            width="stretch",
+            disabled=not audit_events,
         )
 
     st.markdown("### Preview")

@@ -9,7 +9,7 @@ except ImportError:
     AsyncGraphDatabase = None
     AsyncDriver = None
 
-from rahasya.core.models import Entity, Relationship
+from rahasya.core.models import Entity, Relationship, RelationshipType
 from rahasya.config import Settings, settings
 from rahasya.utils.logging import get_logger
 
@@ -276,6 +276,9 @@ class Neo4jBackend(GraphBackend):
         # Cypher doesn't allow dynamic relationship types in MERGE easily, so we use apoc if possible, 
         # but standard way is to build the query dynamically.
         rel_type = rel.relationship_type.value
+        allowed_types = {item.value for item in RelationshipType}
+        if rel_type not in allowed_types:
+            raise ValueError(f"Unsupported Neo4j relationship type: {rel_type}")
         query = f"""
         MATCH (s:Entity {{id: $source_id}}), (t:Entity {{id: $target_id}})
         MERGE (s)-[r:{rel_type} {{id: $rel_id}}]->(t)

@@ -4,6 +4,7 @@ Uses pydantic-settings to load environment variables and .env file.
 All sub-settings are composable and independently configurable.
 """
 
+from pathlib import Path
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,6 +25,7 @@ class RedisSettings(BaseModel):
     """Redis cache and message broker configuration."""
     url: str = Field(default="redis://localhost:6379/0")
     db_number: int = Field(default=0)
+    pubsub_enabled: bool = Field(default=False, description="Publish scan events across processes")
 
 
 class CelerySettings(BaseModel):
@@ -33,6 +35,7 @@ class CelerySettings(BaseModel):
     worker_concurrency: int = Field(default=4)
     task_serializer: str = Field(default="json")
     result_serializer: str = Field(default="json")
+    enabled: bool = Field(default=False, description="Dispatch scans to Celery workers")
 
 
 class TorSettings(BaseModel):
@@ -52,6 +55,18 @@ class ScanSettings(BaseModel):
         default=0.6, ge=0.0, le=1.0,
         description="Minimum confidence to include entity",
     )
+    module_timeout_seconds: float = Field(
+        default=30.0, gt=0, description="Hard timeout for each discovery module",
+    )
+    poll_interval_seconds: int = Field(
+        default=2, ge=1, description="Dashboard polling interval for active scans",
+    )
+
+
+class StorageSettings(BaseModel):
+    """Local durable storage used when a production database is unavailable."""
+
+    scan_dir: Path = Field(default=Path("data/scans"))
 
 
 class APIKeys(BaseModel):
@@ -62,6 +77,13 @@ class APIKeys(BaseModel):
     leaklookup: Optional[str] = Field(default=None, description="Leak-Lookup API key")
     shodan: Optional[str] = Field(default=None, description="Shodan API key")
     virustotal: Optional[str] = Field(default=None, description="VirusTotal API key")
+    hibp_keys: List[str] = Field(default_factory=list, description="Rotating HIBP API-key pool")
+    intelx_keys: List[str] = Field(default_factory=list, description="Rotating Intelligence X API-key pool")
+
+    def pool(self, provider: str) -> List[str]:
+        primary = getattr(self, provider, None)
+        configured = list(getattr(self, f"{provider}_keys", []) or [])
+        return list(dict.fromkeys(([primary] if primary else []) + [key for key in configured if key]))
 
 
 class Neo4jSettings(BaseModel):
@@ -76,6 +98,7 @@ class HTTPSettings(BaseModel):
     """HTTP client resilience configuration."""
     timeout: int = Field(default=30, description="Request timeout in seconds")
     max_retries: int = Field(default=3, description="Retry attempts with backoff")
+    ssl_verify: bool = Field(default=True, description="Verify remote TLS certificates")
     user_agents: List[str] = Field(default_factory=lambda: [
         # Chrome (Windows, Mac, Linux)
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -136,6 +159,7 @@ class Settings(BaseSettings):
     api_keys: APIKeys = APIKeys()
     neo4j: Neo4jSettings = Neo4jSettings()
     http: HTTPSettings = HTTPSettings()
+    storage: StorageSettings = StorageSettings()
 
 
 # Global singleton
