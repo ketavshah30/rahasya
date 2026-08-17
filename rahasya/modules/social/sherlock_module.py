@@ -1,14 +1,18 @@
+"""Sherlock CLI adapter using its supported CSV report output."""
+
 import asyncio
-import json
-import os
+import csv
+import shutil
 import subprocess
 import tempfile
 import time
-from typing import List
+from pathlib import Path
+from typing import Dict, List
 
+from rahasya.core.models import Entity, EntityType, SocialProfileEntity, SourceReliability
 from rahasya.modules.base import BaseModule
-from rahasya.core.models import Entity, EntityType, SourceReliability, SocialProfileEntity
 from rahasya.storage.network_audit import record_audit_event
+
 
 class SherlockModule(BaseModule):
     name = "Sherlock"
@@ -16,27 +20,44 @@ class SherlockModule(BaseModule):
     version = "1.0.0"
     accepts = [EntityType.USERNAME, EntityType.EMAIL]
     produces = [EntityType.SOCIAL_PROFILE, EntityType.URL]
-    
+    rate_limit = 0.0
+
+    @staticmethod
+    def _command(target: str, tmpdir: str) -> List[str]:
+        return [
+            "sherlock", target,
+            "--print-all",
+            "--folderoutput", tmpdir,
+            "--csv",
+            "--no-txt",
+            "--no-color",
+            "--timeout", "10",
+        ]
+
+    @staticmethod
+    def _is_claimed(status: str) -> bool:
+        normalized = status.casefold()
+        return any(marker in normalized for marker in ("claimed", "found", "true"))
+
+    @staticmethod
+    def _read_report(tmpdir: str, target: str) -> List[Dict[str, str]]:
+        expected = Path(tmpdir) / f"{target}.csv"
+        candidates = [expected] if expected.exists() else sorted(Path(tmpdir).glob("*.csv"))
+        rows: List[Dict[str, str]] = []
+        for report_path in candidates:
+            with report_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                rows.extend(dict(row) for row in csv.DictReader(stream))
+        return rows
+
     async def execute(self, entity: Entity, scan_id: str) -> List[Entity]:
-        results = []
-        target = entity.value
-        
-        if entity.entity_type == EntityType.EMAIL:
-            target = target.split("@")[0]
-            
-        temp = tempfile.NamedTemporaryFile(
-            prefix=f"sherlock_report_{scan_id}_", suffix=".json", delete=False
-        )
-        temp_file = temp.name
-        temp.close()
-        
+        results: List[Entity] = []
+        target = entity.value.split("@", 1)[0] if entity.entity_type == EntityType.EMAIL else entity.value
+        tmpdir = tempfile.mkdtemp(prefix=f"sherlock_{scan_id}_")
+
         try:
-            cmd = [
-                "sherlock", target,
-                "--print-all",
-                "--output", temp_file,
-                "--json", temp_file
-            ]
+            # Sherlock 0.16's --json option selects an input site database;
+            # CSV is its machine-readable result format.
+            cmd = self._command(target, tmpdir)
             process_started = time.monotonic()
             record_audit_event(
                 "provider_process_started",
@@ -47,7 +68,7 @@ class SherlockModule(BaseModule):
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
+                stderr=subprocess.PIPE,
             )
             stdout, stderr = await process.communicate()
             record_audit_event(
@@ -59,72 +80,50 @@ class SherlockModule(BaseModule):
                 stdout=stdout.decode(errors="replace")[-500:] if stdout else None,
                 error=stderr.decode(errors="replace")[-500:] if stderr else None,
             )
-            
-            if os.path.exists(temp_file):
-                with open(temp_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    
-                # data is typically a dict with the username as key or directly site -> url
-                target_data = data.get(target, data)
-                
-                for site, site_result in target_data.items():
-                    status = "found"
-                    url = site_result
-                    if isinstance(site_result, dict):
-                        status_value = site_result.get("status", site_result.get("exists", "unknown"))
-                        if isinstance(status_value, dict):
-                            status_value = status_value.get("status", status_value)
-                        status = str(status_value).casefold()
-                        url = site_result.get("url_user", "") or site_result.get("url_main", "")
-                    found = bool(url and isinstance(url, str))
-                    if any(marker in status for marker in ("available", "not found", "not_found", "false")):
-                        found = False
-                    elif any(marker in status for marker in ("claimed", "found", "true")):
-                        found = True
-                    record_audit_event(
-                        "provider_site_check",
-                        outcome="success" if found else ("failed" if "error" in status else "not_found"),
-                        url=url if isinstance(url, str) else None,
-                        provider="sherlock",
-                        site=site,
-                        provider_status=status,
-                    )
-                    
-                    if found and url and isinstance(url, str):
-                        profile = SocialProfileEntity(
-                            entity_type=EntityType.SOCIAL_PROFILE,
-                            value=url,
-                            normalized_value=url.lower().strip(),
-                            source_module=self.name,
-                            source_reliability=SourceReliability.MEDIUM,
-                            confidence=0.75,
-                            metadata={"site": site},
-                            parent_entity_id=entity.id,
-                            depth=entity.depth + 1,
-                            url=url,
-                            platform=site
-                        )
-                        results.append(profile)
-                        
-        except Exception as e:
+
+            for site_result in self._read_report(tmpdir, target):
+                site = site_result.get("name", "Unknown")
+                status = site_result.get("exists", "unknown")
+                url = site_result.get("url_user") or site_result.get("url_main") or ""
+                found = self._is_claimed(status)
+                record_audit_event(
+                    "provider_site_check",
+                    outcome="success" if found else ("failed" if "error" in status.casefold() else "not_found"),
+                    url=url or None,
+                    provider="sherlock",
+                    site=site,
+                    provider_status=status,
+                    status_code=site_result.get("http_status") or None,
+                    duration_seconds=site_result.get("response_time_s") or None,
+                )
+                if not found or not url:
+                    continue
+                results.append(SocialProfileEntity(
+                    value=url,
+                    normalized_value=url.casefold().strip(),
+                    source_module=self.name,
+                    source_reliability=SourceReliability.MEDIUM,
+                    confidence=0.75,
+                    metadata={"site": site, "provider_status": status},
+                    parent_entity_id=entity.id,
+                    depth=entity.depth + 1,
+                    url=url,
+                    platform=site,
+                ))
+        except Exception as exc:
             record_audit_event(
                 "provider_process_failed",
                 outcome="failed",
                 provider="sherlock",
                 target=target,
-                error_type=type(e).__name__,
-                error=str(e),
+                error_type=type(exc).__name__,
+                error=str(exc),
             )
-            self.logger.error(f"Sherlock execution failed: {e}")
+            self.logger.error(f"Sherlock execution failed: {exc}")
         finally:
-            if os.path.exists(temp_file):
-                try:
-                    os.remove(temp_file)
-                except OSError:
-                    pass
-            
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
         return results
 
     def is_available(self) -> bool:
-        import shutil
-        return shutil.which('sherlock') is not None
+        return shutil.which("sherlock") is not None

@@ -49,11 +49,14 @@ services:
       - "8501:8501"
     volumes:
       - scan-data:/app/data/scans
+      - state-data:/app/data/state
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      tor:
+        condition: service_started
 
   worker:
     build: .
@@ -68,11 +71,14 @@ services:
       - "9108:9108"
     volumes:
       - scan-data:/app/data/scans
+      - state-data:/app/data/state
     depends_on:
       redis:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      tor:
+        condition: service_started
 
   flower:
     build: .
@@ -92,3 +98,4 @@ volumes:
   redis-data:
   neo4j-data:
   scan-data:
+  state-data:

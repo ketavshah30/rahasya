@@ -32,7 +32,7 @@ class HIBPModule(BaseModule):
             # 1. Breached accounts
             encoded_email = quote_plus(email)
             breach_url = f"{self.BASE_URL}/breachedaccount/{encoded_email}?truncateResponse=false"
-            breach_resp = await self.http_client.get(breach_url, headers=headers)
+            breach_resp = await self.client.get(breach_url, headers=headers)
             
             if breach_resp.status_code == 200:
                 breaches = breach_resp.json()
@@ -67,7 +67,7 @@ class HIBPModule(BaseModule):
             
             # 2. Paste accounts
             paste_url = f"{self.BASE_URL}/pasteaccount/{encoded_email}"
-            paste_resp = await self.http_client.get(paste_url, headers=headers)
+            paste_resp = await self.client.get(paste_url, headers=headers)
             
             if paste_resp.status_code == 200:
                 pastes = paste_resp.json()

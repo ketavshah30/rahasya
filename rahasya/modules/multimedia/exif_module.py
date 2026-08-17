@@ -13,6 +13,7 @@ class ExifModule(BaseModule):
     version = "1.0.0"
     accepts = [EntityType.PHOTO]
     produces = [EntityType.LOCATION, EntityType.PHOTO]
+    rate_limit = 0.0
     
     def _convert_to_degrees(self, value):
         d, m, s = value

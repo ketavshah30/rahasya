@@ -12,19 +12,24 @@ class ArchiveModule(BaseModule):
     version = "1.0.0"
     accepts = [EntityType.URL, EntityType.DOMAIN, EntityType.SOCIAL_PROFILE]
     produces = [EntityType.URL, EntityType.TIMELINE_EVENT]
+    http_max_retries = 5
+    REQUEST_HEADERS = {
+        "User-Agent": "Rahasya OSINT Platform (contact: maintainer@rahasya.local)",
+        "Accept": "application/json",
+    }
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
     async def execute(self, entity: Entity, scan_id: str) -> List[Entity]:
-        results = []
+        results: List[Entity] = []
         url = entity.value
         encoded_url = quote_plus(url)
         
         # 1. Availability API
         try:
             avail_url = f"https://archive.org/wayback/available?url={encoded_url}"
-            avail_resp = await self.http_client.get(avail_url)
+            avail_resp = await self.client.get(avail_url, headers=self.REQUEST_HEADERS)
             
             if avail_resp.status_code == 200:
                 data = avail_resp.json()
@@ -53,7 +58,7 @@ class ArchiveModule(BaseModule):
         # 2. CDX API (last 20)
         try:
             cdx_url = f"https://web.archive.org/cdx/search/cdx?url={encoded_url}&output=json&limit=20"
-            cdx_resp = await self.http_client.get(cdx_url)
+            cdx_resp = await self.client.get(cdx_url, headers=self.REQUEST_HEADERS)
             
             if cdx_resp.status_code == 200:
                 data = cdx_resp.json()

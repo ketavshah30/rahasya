@@ -2,10 +2,13 @@ import asyncio
 import json
 import os
 from typing import List, Dict, Any, Optional
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlsplit
+
+import httpx
 
 from rahasya.modules.base import BaseModule
 from rahasya.core.models import Entity, EntityType, SourceReliability, SocialProfileEntity
+from rahasya.storage.network_audit import record_audit_event
 
 class WhatsMyNameModule(BaseModule):
     name = "WhatsMyName"
@@ -16,6 +19,8 @@ class WhatsMyNameModule(BaseModule):
     
     DATA_URL = "https://raw.githubusercontent.com/WebBreacher/WhatsMyName/main/wmn-data.json"
     CACHE_PATH = "data/cache/whatsmyname_data.json"
+    request_jitter = None
+    host_failure_limit = 3
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -35,7 +40,11 @@ class WhatsMyNameModule(BaseModule):
                 
         if not self.sites_data:
             try:
-                response = await self.http_client.get(self.DATA_URL)
+                headers = {}
+                github_token = os.getenv("GITHUB_TOKEN")
+                if github_token:
+                    headers["Authorization"] = f"Bearer {github_token}"
+                response = await self.client.get(self.DATA_URL, headers=headers)
                 if response.status_code == 200:
                     self.sites_data = response.json()
                     with open(self.CACHE_PATH, "w", encoding="utf-8") as f:
@@ -50,7 +59,7 @@ class WhatsMyNameModule(BaseModule):
             return None
             
         try:
-            response = await self.http_client.get(url, timeout=10)
+            response = await self.client.get(url, timeout=10)
             text = response.text if hasattr(response, "text") else ""
             
             e_code = site.get("e_code", 200)
@@ -81,6 +90,8 @@ class WhatsMyNameModule(BaseModule):
                     url=profile_url,
                     platform=site.get("name", "Unknown")
                 )
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            raise
         except Exception:
             pass
         return None
@@ -92,30 +103,56 @@ class WhatsMyNameModule(BaseModule):
         if not self.sites_data:
             return []
             
-        results = []
+        results: List[Entity] = []
         target = entity.value
         if entity.entity_type == EntityType.EMAIL:
             target = target.split("@")[0]
             
         sites = self.sites_data.get("sites", [])
         
-        semaphore = asyncio.Semaphore(30)
+        semaphore = asyncio.Semaphore(150)
+        host_failures: Dict[str, int] = {}
+        blocked_hosts = set()
+        circuit_lock = asyncio.Lock()
+        host_locks: Dict[str, asyncio.Lock] = {}
         
         async def bound_check(site):
+            check_url = site.get("uri_check", "").replace("{account}", quote_plus(target))
+            host = urlsplit(check_url).hostname or "unknown"
+            host_lock = host_locks.setdefault(host, asyncio.Lock())
             async with semaphore:
-                res = await self.check_site(site, target)
-                if res:
-                    res.parent_entity_id = entity.id
-                    res.depth = entity.depth + 1
-                # delay for rate limit roughly
-                await asyncio.sleep(0.1)
-                return res
+                async with host_lock:
+                    async with circuit_lock:
+                        if host in blocked_hosts:
+                            record_audit_event(
+                                "source_skipped",
+                                outcome="skipped",
+                                url=check_url or None,
+                                source_name=site.get("name", "unknown"),
+                                skip_reason="host_circuit_open",
+                                message=f"Skipped after {self.host_failure_limit} consecutive connection failures",
+                            )
+                            return None
+                    try:
+                        res = await self.check_site(site, target)
+                    except (httpx.ConnectError, httpx.ConnectTimeout):
+                        async with circuit_lock:
+                            host_failures[host] = host_failures.get(host, 0) + 1
+                            if host_failures[host] >= self.host_failure_limit:
+                                blocked_hosts.add(host)
+                        return None
+                    async with circuit_lock:
+                        host_failures[host] = 0
+                    if res:
+                        res.parent_entity_id = entity.id
+                        res.depth = entity.depth + 1
+                    return res
                 
         tasks = [bound_check(site) for site in sites]
         completed = await asyncio.gather(*tasks, return_exceptions=True)
         
         for res in completed:
-            if res and not isinstance(res, Exception):
+            if isinstance(res, SocialProfileEntity):
                 results.append(res)
                 
         return results

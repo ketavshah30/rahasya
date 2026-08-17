@@ -26,6 +26,7 @@ class EntityType(str, Enum):
     PARTIAL_PHONE = "partial_phone"
     COMPANY = "company"
     TIMELINE_EVENT = "timeline_event"
+    PASSWORD_HASH = "password_hash"
 
 
 class SourceReliability(str, Enum):

@@ -20,7 +20,12 @@ class OnionSearchModule(BaseModule):
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.tor = TorManager()
+        self.tor = TorManager(
+            socks_host=self.config.tor.socks_host,
+            socks_port=self.config.tor.socks_port,
+            control_port=self.config.tor.control_port,
+            password=self.config.tor.password or "",
+        )
         self.engines = []
         
     async def initialize(self):

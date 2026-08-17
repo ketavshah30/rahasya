@@ -1,10 +1,14 @@
 import asyncio
-import time
+import json
+import os
+import tempfile
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import List
 
 from rahasya.modules.base import BaseModule
-from rahasya.core.models import Entity, EntityType, SourceReliability, DarkWebMention, Entity as LeakRecordFallback
-from rahasya.utils.http_client import StealthHTTPClient
+from rahasya.core.models import Entity, EntityType, SourceReliability, DarkWebMention
 
 class IntelXModule(BaseModule):
     name = "IntelligenceX"
@@ -13,20 +17,58 @@ class IntelXModule(BaseModule):
     accepts = [EntityType.EMAIL, EntityType.PHONE, EntityType.DOMAIN]
     produces = [EntityType.LEAK_RECORD, EntityType.DARK_WEB_MENTION]
     
-    BASE_URL = "https://2.intelx.io"
-    
+    DAILY_LIMIT = 10
+    _usage_lock = threading.RLock()
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.daily_usage = 0
+        self.usage_path = Path(self.config.storage.state_dir) / "intelx_usage.json"
+
+    def _load_daily_usage(self) -> int:
+        today = datetime.now(timezone.utc).date().isoformat()
+        try:
+            with self.usage_path.open("r", encoding="utf-8") as stream:
+                payload = json.load(stream)
+            if payload.get("date") == today:
+                return max(0, int(payload.get("count", 0)))
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+        return 0
+
+    def _save_daily_usage(self, count: int) -> None:
+        self.usage_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "date": datetime.now(timezone.utc).date().isoformat(),
+            "count": count,
+        }
+        with self._usage_lock:
+            handle, temp_name = tempfile.mkstemp(
+                prefix=".intelx_usage.", suffix=".tmp", dir=self.usage_path.parent
+            )
+            try:
+                with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                    json.dump(payload, stream)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temp_name, self.usage_path)
+            finally:
+                if os.path.exists(temp_name):
+                    os.unlink(temp_name)
+
+    def _increment_daily_usage(self) -> int:
+        with self._usage_lock:
+            count = self._load_daily_usage() + 1
+            self._save_daily_usage(count)
+            return count
         
     async def execute(self, entity: Entity, scan_id: str) -> List[Entity]:
-        results = []
+        results: List[Entity] = []
         api_key = self._get_api_key()
         
         if not api_key:
             return results
             
-        if self.daily_usage >= 10:
+        if self._load_daily_usage() >= self.DAILY_LIMIT:
             self.logger.warning("IntelX daily usage limit reached")
             return results
             
@@ -45,9 +87,9 @@ class IntelXModule(BaseModule):
         
         try:
             # 1. Init search
-            search_url = f"{self.BASE_URL}/intelligent/search"
-            search_resp = await self.http_client.post(search_url, headers=headers, json=payload)
-            self.daily_usage += 1
+            search_url = f"{self.config.intelx.base_url}/intelligent/search"
+            search_resp = await self.client.post(search_url, headers=headers, json=payload)
+            self._increment_daily_usage()
             
             if search_resp.status_code == 200:
                 data = search_resp.json()
@@ -59,8 +101,10 @@ class IntelXModule(BaseModule):
                 # Poll results
                 for _ in range(3):
                     await asyncio.sleep(2)
-                    result_url = f"{self.BASE_URL}/intelligent/search/result?id={search_id}"
-                    res_resp = await self.http_client.get(result_url, headers=headers)
+                    result_url = (
+                        f"{self.config.intelx.base_url}/intelligent/search/result?id={search_id}"
+                    )
+                    res_resp = await self.client.get(result_url, headers=headers)
                     
                     if res_resp.status_code == 200:
                         res_data = res_resp.json()

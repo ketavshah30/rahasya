@@ -6,12 +6,6 @@
     "enabled": true
   },
   {
-    "name": "Ahmia Clearnet",
-    "url": "https://ahmia.fi/search/?q={query}",
-    "parser": "ahmia",
-    "enabled": true
-  },
-  {
     "name": "Haystak",
     "url": "http://haystak5njsmn2hqkewecpaxetahtwhsbsa64jom2k22z5afxhnpxfid.onion/?q={query}",
     "parser": "haystak",
@@ -20,6 +14,12 @@
   {
     "name": "Torch",
     "url": "http://torchqsxk47ubqj53l2tj54qlwgvxgr5ohs7o3bck2p4l4xwjsm7v7ad.onion/search?q={query}",
+    "parser": "generic",
+    "enabled": true
+  },
+  {
+    "name": "DuckDuckGo Onion",
+    "url": "https://duckduckgogg42xjoc72x3sjianso2pfpt5obsmzjhoqcwxvtzgw.onion/?q={query}",
     "parser": "generic",
     "enabled": true
   }

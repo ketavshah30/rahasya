@@ -32,7 +32,7 @@ class LeakLookupModule(BaseModule):
         }
         
         try:
-            resp = await self.http_client.post(self.BASE_URL, data=data)
+            resp = await self.client.post(self.BASE_URL, data=data)
             if resp.status_code == 200:
                 resp_json = resp.json()
                 error = resp_json.get("error", "false")

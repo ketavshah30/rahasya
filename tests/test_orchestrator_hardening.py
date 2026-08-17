@@ -71,3 +71,22 @@ async def test_module_timeout_is_enforced(tmp_path):
     assert result.status == ScanStatus.COMPLETED
     assert result.stats.total_entities == 1
     assert result.stats.modules_run == 1
+
+
+@pytest.mark.asyncio
+async def test_module_timeout_override_takes_precedence(tmp_path):
+    config = configured(tmp_path)
+    config.scan.module_timeout_seconds = 0.01
+    config.scan.module_timeout_overrides["Fake"] = 0.2
+    config.scan.confidence_threshold = 0.8
+    module = FakeModule(delay=0.05, confidence=0.2)
+    orchestrator = Orchestrator(config)
+    orchestrator.module_registry.get_modules_for = lambda entity_type: [module]
+
+    scan_id = await orchestrator.start_scan(ScanRequest(username="seed"))
+    await asyncio.wait_for(orchestrator._tasks[scan_id], timeout=0.5)
+    result = orchestrator.get_scan_result(scan_id)
+
+    assert result.status == ScanStatus.COMPLETED
+    assert module.calls == 1
+    assert result.stats.total_entities == 2

@@ -203,15 +203,22 @@ class Orchestrator:
 
                     module_names = ", ".join(module.name for module in modules)
                     self._persist_state(scan_id, depth=current_depth, module=module_names)
+                    module_timeouts = [
+                        self.config.scan.module_timeout_overrides.get(
+                            module.name,
+                            self.config.scan.module_timeout_seconds,
+                        )
+                        for module in modules
+                    ]
 
                     # Execute all applicable modules in parallel
                     results = await asyncio.gather(
                         *[
                             asyncio.wait_for(
                                 mod.safe_execute(entity, scan_id),
-                                timeout=self.config.scan.module_timeout_seconds,
+                                timeout=module_timeout,
                             )
-                            for mod in modules
+                            for mod, module_timeout in zip(modules, module_timeouts)
                         ],
                         return_exceptions=True,
                     )
@@ -230,7 +237,7 @@ class Orchestrator:
                                 source_module=module_name,
                                 entity_type=entity.entity_type.value,
                                 entity_value=entity.value,
-                                timeout_seconds=self.config.scan.module_timeout_seconds if is_timeout else None,
+                                timeout_seconds=module_timeouts[i] if is_timeout else None,
                                 error_type=type(result).__name__,
                                 error=str(result),
                             )

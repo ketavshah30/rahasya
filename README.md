@@ -78,6 +78,10 @@ python -m rahasya worker
 docker compose up --build
 ```
 
+Run network-heavy scans through the Linux Compose stack. The Windows host can
+block high-fanout outbound connections with `WinError 10013`; the container
+also verifies that current Maigret and Sherlock executables are installed.
+
 ## Configuration
 | Environment Variable | Description |
 | --- | --- |
@@ -87,12 +91,16 @@ docker compose up --build
 | `CELERY__ENABLED` | Dispatch dashboard scans to workers instead of local threads |
 | `API_KEYS__HIBP` | HaveIBeenPwned API key (optional) |
 | `API_KEYS__INTELX` | IntelligenceX API key (optional) |
+| `API_KEYS__INTELX_TIER` | IntelligenceX instance tier: `public`, `free`, or `paid` |
 | `NEO4J__URI` | Neo4j connection URI (optional) |
 | `TOR__SOCKS_PORT` | Tor SOCKS port (optional) |
+| `TOR__SOCKS_HOST` | Tor SOCKS host (`tor` in Compose, localhost outside it) |
+| `SCAN__MODULE_TIMEOUT_SECONDS` | Default module deadline; high-fanout modules use 600-second overrides |
 | `SCAN__MAX_DEPTH` | Maximum recursive depth |
 | `SCAN__MAX_ENTITIES` | Maximum entity count |
 | `SCAN__MAX_TIME_MINUTES` | Maximum scan duration |
 | `STORAGE__SCAN_DIR` | Durable JSON scan directory |
+| `STORAGE__STATE_DIR` | Durable provider quota state directory |
 | `LOG_LEVEL` | Application logging level |
 | `ENVIRONMENT` | Environment type (development/production) |
 | `DEBUG` | Debug mode toggle |
@@ -101,7 +109,7 @@ docker compose up --build
 | Module | Input | Output | Requires | Notes |
 | --- | --- | --- | --- | --- |
 | Social | Username, Name | Profiles, Aliases | - | Uses Maigret, Sherlock, WhatsMyName |
-| Breach | Email, Domain | Passwords, Breaches | API Keys | Uses HIBP, IntelX, LeakLookup |
+| Breach | Email, Domain, Password hash | Breaches | API Keys for HIBP/IntelX/LeakLookup | Includes free HIBP Pwned Passwords lookup |
 | DarkWeb | Email, Alias | Onion URLs | Tor | Uses Ahmia, OnionSearch |
 | Multimedia | Images | EXIF Data, Hashes | - | Analyzes metadata and similarities |
 

@@ -9,18 +9,31 @@ from rahasya.storage.network_audit import record_audit_event
 class TorManager:
     """Manages Tor connections and circuit renewal for dark web modules."""
     
-    def __init__(self, socks_port: int = 9050, control_port: int = 9051, password: str = ""):
+    def __init__(
+        self,
+        socks_host: str = "127.0.0.1",
+        socks_port: int = 9050,
+        control_port: int = 9051,
+        password: str = "",
+    ):
+        self.socks_host = socks_host
         self.socks_port = socks_port
         self.control_port = control_port
         self.password = password
         self.logger = logging.getLogger("rahasya.tor_manager")
-        self.proxy_url = f"socks5://127.0.0.1:{self.socks_port}"
+        self.proxy_url = f"socks5h://{self.socks_host}:{self.socks_port}"
+
+    def _proxy_transport(self) -> AsyncProxyTransport:
+        # python-socks resolves destination hostnames through SOCKS5 but its
+        # URL parser accepts only socks5://, not the socks5h:// alias.
+        transport_url = self.proxy_url.replace("socks5h://", "socks5://", 1)
+        return AsyncProxyTransport.from_url(transport_url)
         
     async def check_tor_running(self) -> bool:
         url = "https://check.torproject.org/api/ip"
         started = time.monotonic()
         try:
-            transport = AsyncProxyTransport.from_url(self.proxy_url)
+            transport = self._proxy_transport()
             async with httpx.AsyncClient(transport=transport, timeout=10.0) as client:
                 resp = await client.get(url)
                 is_tor = resp.status_code == 200 and bool(resp.json().get("IsTor", False))
@@ -53,7 +66,7 @@ class TorManager:
         return False
         
     def get_async_client(self) -> httpx.AsyncClient:
-        transport = AsyncProxyTransport.from_url(self.proxy_url)
+        transport = self._proxy_transport()
         return httpx.AsyncClient(transport=transport, timeout=30.0)
         
     async def renew_circuit(self) -> bool:

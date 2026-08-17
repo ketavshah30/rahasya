@@ -5,8 +5,8 @@ All sub-settings are composable and independently configurable.
 """
 
 from pathlib import Path
-from typing import List, Optional
-from pydantic import BaseModel, Field
+from typing import List, Literal, Optional
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -41,6 +41,7 @@ class CelerySettings(BaseModel):
 class TorSettings(BaseModel):
     """Tor proxy and circuit management configuration."""
     enabled: bool = Field(default=False, description="Enable Tor routing")
+    socks_host: str = Field(default="127.0.0.1", description="Tor SOCKS proxy hostname")
     socks_port: int = Field(default=9050)
     control_port: int = Field(default=9051)
     password: Optional[str] = Field(default=None, description="Tor control password")
@@ -58,6 +59,14 @@ class ScanSettings(BaseModel):
     module_timeout_seconds: float = Field(
         default=30.0, gt=0, description="Hard timeout for each discovery module",
     )
+    module_timeout_overrides: dict[str, float] = Field(
+        default_factory=lambda: {
+            "Maigret": 600.0,
+            "Sherlock": 600.0,
+            "WhatsMyName": 600.0,
+        },
+        description="Longer hard timeouts for high-fanout discovery modules",
+    )
     poll_interval_seconds: int = Field(
         default=2, ge=1, description="Dashboard polling interval for active scans",
     )
@@ -67,6 +76,21 @@ class StorageSettings(BaseModel):
     """Local durable storage used when a production database is unavailable."""
 
     scan_dir: Path = Field(default=Path("data/scans"))
+    state_dir: Path = Field(default=Path("data/state"))
+
+
+class IntelXSettings(BaseModel):
+    """Intelligence X API instance selection by subscription tier."""
+
+    tier: Literal["public", "free", "paid"] = "free"
+
+    @property
+    def base_url(self) -> str:
+        return {
+            "public": "https://public.intelx.io",
+            "free": "https://free.intelx.io",
+            "paid": "https://2.intelx.io",
+        }[self.tier]
 
 
 class APIKeys(BaseModel):
@@ -79,6 +103,10 @@ class APIKeys(BaseModel):
     virustotal: Optional[str] = Field(default=None, description="VirusTotal API key")
     hibp_keys: List[str] = Field(default_factory=list, description="Rotating HIBP API-key pool")
     intelx_keys: List[str] = Field(default_factory=list, description="Rotating Intelligence X API-key pool")
+    intelx_tier: Optional[Literal["public", "free", "paid"]] = Field(
+        default=None,
+        description="Compatibility setting for API_KEYS__INTELX_TIER",
+    )
 
     def pool(self, provider: str) -> List[str]:
         primary = getattr(self, provider, None)
@@ -160,6 +188,14 @@ class Settings(BaseSettings):
     neo4j: Neo4jSettings = Neo4jSettings()
     http: HTTPSettings = HTTPSettings()
     storage: StorageSettings = StorageSettings()
+    intelx: IntelXSettings = IntelXSettings()
+
+    @model_validator(mode="after")
+    def apply_legacy_intelx_tier(self):
+        """Support the FIXES.md API_KEYS__INTELX_TIER environment spelling."""
+        if self.api_keys.intelx_tier:
+            self.intelx.tier = self.api_keys.intelx_tier
+        return self
 
 
 # Global singleton

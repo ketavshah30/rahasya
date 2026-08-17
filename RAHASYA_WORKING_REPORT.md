@@ -331,7 +331,7 @@ Final status becomes `COMPLETED`, `FAILED`, or `CANCELLED`. HTTP clients are clo
 
 ## 5. Sites, APIs, and local tools actually used
 
-The current runtime auto-registers **11 modules**.
+The current runtime auto-registers **12 modules**.
 
 ### 5.1 Social/username modules
 
@@ -346,29 +346,34 @@ The current runtime auto-registers **11 modules**.
 Command shape:
 
 ```text
-maigret <target> --json <temporary-file> --no-color --timeout 10
+maigret <target> --json ndjson --folderoutput <temporary-directory> --no-color --timeout 10 --retries 1
 ```
 
 - For email input, only the part before `@` is searched.
 - Found sites become `SOCIAL_PROFILE` entities at confidence `0.85` and reliability `high`.
 - Emails found in returned `about`/bio text become `EMAIL` entities at confidence `0.70`.
-- The temporary JSON report is unique per run and deleted in `finally`.
+- Maigret's line-delimited report is parsed one record at a time.
+- The temporary report directory is unique per run and recursively deleted in `finally`.
 
 #### Sherlock details
 
 Command shape:
 
 ```text
-sherlock <target> --print-all --output <temporary-file> --json <temporary-file>
+sherlock <target> --print-all --folderoutput <temporary-directory> --csv --no-txt --no-color --timeout 10
 ```
 
 - Email inputs are reduced to the local part.
+- Sherlock's `--json` option is an input site-database selector, so Rahasya uses its supported CSV result format.
 - Returned profiles receive confidence `0.75`, reliability `medium`.
 
 #### WhatsMyName details
 
 - Its exact destination-site list is dynamic and is not hardcoded in Rahasya.
-- Up to 30 site checks run concurrently.
+- Up to 150 site checks run concurrently.
+- Request jitter is disabled for this batch module; checks are still bounded by the semaphore.
+- Three consecutive connection failures open a per-host circuit for the remainder of that scan.
+- `GITHUB_TOKEN`, when set, is sent only while fetching the upstream catalog.
 - It uses each catalog entry's expected status code, positive string, and missing string.
 - A positive result receives confidence `0.80`, reliability `medium`.
 - The catalog is cached at `data/cache/whatsmyname_data.json`.
@@ -380,8 +385,9 @@ Because Maigret, Sherlock, and WhatsMyName use external catalogs, a truthful fix
 | Module | Endpoints | Inputs | Outputs | Required configuration |
 |---|---|---|---|---|
 | **Have I Been Pwned (HIBP)** | `https://haveibeenpwned.com/api/v3/breachedaccount/<email>` and `/pasteaccount/<email>` | Email | Breach records | `API_KEYS__HIBP` or key pool |
+| **HIBP Pwned Passwords** | `https://api.pwnedpasswords.com/range/<SHA1-prefix>` | Password/SHA-1 supplied as `PASSWORD_HASH` | High-severity breach record when found | No key; k-anonymity range query |
 | **Leak-Lookup** | `https://leak-lookup.com/api/search` | Email | Breach records | `API_KEYS__LEAKLOOKUP` |
-| **Intelligence X** | `https://2.intelx.io/intelligent/search` and `/intelligent/search/result?id=...` | Email, phone, domain | Leak records and dark-web mentions | `API_KEYS__INTELX` or key pool |
+| **Intelligence X** | Tier-selected `public.intelx.io`, `free.intelx.io`, or `2.intelx.io`, then `/intelligent/search` and `/intelligent/search/result?id=...` | Email, phone, domain | Leak records and dark-web mentions | `API_KEYS__INTELX`; tier defaults to `free` |
 
 HIBP assigns:
 
@@ -395,7 +401,7 @@ Leak-Lookup assigns confidence `0.80`, medium reliability, and a fixed `Medium` 
 Intelligence X:
 
 - starts a search, then polls up to three times at two-second intervals;
-- limits itself to 10 started searches per module instance/day counter;
+- limits itself to 10 started searches per UTC day using durable `data/state/intelx_usage.json` state;
 - labels records whose bucket contains `darknet` as dark-web mentions at confidence `0.85`;
 - stores other records as generic leak records at confidence `0.80`.
 
@@ -403,15 +409,15 @@ Intelligence X:
 
 | Module | Contacted sites | Tor required? | Output |
 |---|---|---:|---|
-| **Ahmia** | `https://ahmia.fi/api/search/?q=...` | No | Up to 10 dark-web mention entities |
-| **OnionSearch** | Tor check plus configured Ahmia Onion, Ahmia clearnet, Haystak, and Torch search URLs | Yes | Up to five parsed results per engine |
+| **Ahmia** | HTML `https://ahmia.fi/search/?q=...` | No | Up to 10 dark-web mention entities |
+| **OnionSearch** | Tor check plus configured Ahmia Onion, Haystak, Torch, and DuckDuckGo Onion URLs | Yes | Up to five parsed results per engine |
 
 Configured search engines are in `data/config/onion_engines.json`:
 
 - Ahmia onion service;
-- Ahmia clearnet search;
 - Haystak onion service;
-- Torch onion service.
+- Torch onion service;
+- DuckDuckGo onion service.
 
 OnionSearch first calls:
 
@@ -419,7 +425,7 @@ OnionSearch first calls:
 https://check.torproject.org/api/ip
 ```
 
-through the SOCKS proxy. If it does not confirm `IsTor: true`, OnionSearch returns no results. Even the clearnet engine inside this module is therefore skipped when Tor is unavailable. The separate Ahmia module remains the no-Tor path.
+through the `socks5h://` SOCKS proxy. If it does not confirm `IsTor: true`, OnionSearch returns no results. The separate Ahmia HTML scraper remains the no-Tor path and disables itself for a scan after repeated redirected/empty responses.
 
 Dark-web results are search-index matches, not proof that the target owns an account, committed an act, or was directly compromised.
 
@@ -751,13 +757,14 @@ The event enum contains entity/module lifecycle event types, but the orchestrato
 
 ## 16. What is implemented versus what planning files claim
 
-The actual runtime registry currently contains these 11 modules:
+The actual runtime registry currently contains these 12 modules:
 
 ```text
 Ahmia
 WaybackMachine
 ExifData
 HIBP
+HIBPPasswords
 ImageHash
 IntelligenceX
 LeakLookup
@@ -777,7 +784,7 @@ The current module tree does **not** contain live implementations for many names
 - Dread, Hunchly, BreachDirectory, HudsonRock, LeakPeek, Snusbase;
 - GitHub/account-age/email-age modules;
 - Yandex/Bing/PimEyes reverse-image adapters;
-- Numverify, Twilio Lookup, Hunter, and HIBP Passwords modules.
+- Numverify, Twilio Lookup, and Hunter modules.
 
 Their corresponding model or relationship names may exist, but they are not contacted or executed by `ModuleRegistry` in this codebase. This distinction explains why family, employer, recovery, and alt-account metrics can remain empty even though the UI supports displaying those relationship types.
 
@@ -913,7 +920,7 @@ The **Network & Source Log** dashboard page reads this file while a scan is runn
 - Tor exit verification and `.onion` health checks;
 - each configured OnionSearch engine request and disabled-engine skip;
 - URLs that loaded successfully but later failed during HTML parsing;
-- every Maigret and Sherlock provider process, return code, and per-site result exposed by their JSON reports;
+- every Maigret and Sherlock provider process, return code, and per-site result exposed by their machine-readable reports;
 - module start, completion, no-result, skip, cancellation, timeout, and exception events;
 - scan/depth lifecycle events and limits that stopped further traversal.
 
@@ -941,7 +948,7 @@ Runtime event meanings:
 | `module_completed / no_results` | The module ran without an exception but produced no entities. |
 | `module_timeout` | The orchestrator's per-module deadline was exceeded. |
 
-Configured first-party destinations currently visible in code/config include HIBP, Intelligence X, Leak-Lookup, Ahmia, the Internet Archive/Wayback Machine, Tor Project exit verification, the DuckDuckGo onion health endpoint, the WhatsMyName catalog on GitHub, and the configured Ahmia/Haystak/Torch search endpoints. WhatsMyName then checks the catalog-provided public sites through the shared HTTP client. Maigret and Sherlock perform their own checks inside external CLI processes; their provider reports are converted into per-site audit events because their internal sockets are not directly visible to Rahasya.
+Configured first-party destinations currently visible in code/config include HIBP, HIBP Pwned Passwords, tier-selected Intelligence X, Leak-Lookup, Ahmia HTML search, the Internet Archive/Wayback Machine, Tor Project exit verification, the DuckDuckGo onion health endpoint, the WhatsMyName catalog on GitHub, and the configured Ahmia/Haystak/Torch/DuckDuckGo onion search endpoints. WhatsMyName then checks the catalog-provided public sites through the shared HTTP client. Maigret and Sherlock perform their own checks inside external CLI processes; their provider reports are converted into per-site audit events because their internal sockets are not directly visible to Rahasya.
 
 Security and retention behavior:
 

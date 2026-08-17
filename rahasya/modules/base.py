@@ -11,7 +11,7 @@ the execute() method. The base class provides:
 import time
 import asyncio
 from abc import ABC, abstractmethod
-from typing import List, Optional, ClassVar
+from typing import ClassVar, List, Optional
 
 from rahasya.core.models import Entity, EntityType, SourceReliability
 from rahasya.config import Settings, settings
@@ -34,6 +34,8 @@ class BaseModule(ABC):
     requires_api_key: ClassVar[bool] = False
     requires_tor: ClassVar[bool] = False
     rate_limit: ClassVar[float] = 1.0  # max requests per second
+    request_jitter: ClassVar[Optional[tuple[float, float]]] = (0.5, 2.0)
+    http_max_retries: ClassVar[Optional[int]] = None
 
     def __init__(self, config: Optional[Settings] = None):
         """Initialize module with application configuration.
@@ -57,17 +59,21 @@ class BaseModule(ABC):
             return
 
         if self.requires_tor and self.config.tor.enabled:
-            tor_proxy = f"socks5h://127.0.0.1:{self.config.tor.socks_port}"
+            tor_proxy = (
+                f"socks5h://{self.config.tor.socks_host}:{self.config.tor.socks_port}"
+            )
             self.http_client = TorHTTPClient(
                 tor_proxy=tor_proxy,
                 timeout=float(self.config.http.timeout),
                 ssl_verify=self.config.http.ssl_verify,
+                request_jitter=self.request_jitter,
             )
         elif self.http_client is None:
             self.http_client = StealthHTTPClient(
                 timeout=float(self.config.http.timeout),
-                max_retries=self.config.http.max_retries,
+                max_retries=self.http_max_retries or self.config.http.max_retries,
                 ssl_verify=self.config.http.ssl_verify,
+                request_jitter=self.request_jitter,
             )
 
         self._initialized = True
@@ -79,6 +85,13 @@ class BaseModule(ABC):
             await self.http_client.close()
             self.http_client = None
         self._initialized = False
+
+    @property
+    def client(self) -> StealthHTTPClient:
+        """Return the initialized client with a non-optional module contract."""
+        if self.http_client is None:
+            raise RuntimeError(f"Module {self.name} HTTP client is not initialized")
+        return self.http_client
 
     def is_available(self) -> bool:
         """Check whether this module can run given current configuration.
@@ -151,6 +164,8 @@ class BaseModule(ABC):
         """
         entity_type_value = getattr(getattr(entity, "entity_type", None), "value", "unknown")
         entity_value = getattr(entity, "value", "")
+        if entity_type_value == EntityType.PASSWORD_HASH.value:
+            entity_value = "[REDACTED]"
         with audit_scope(scan_id, self.name, self.config.storage.scan_dir):
             if not self.is_available():
                 self.logger.debug(f"Skipping {self.name}: not available")

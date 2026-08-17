@@ -22,6 +22,7 @@ class ImageHashModule(BaseModule):
     version = "1.0.0"
     accepts = [EntityType.PHOTO]
     produces = [EntityType.PHOTO]
+    rate_limit = 0.0
     
     async def execute(self, entity: Entity, scan_id: str) -> List[Entity]:
         results = []

@@ -1,0 +1,12 @@
+{
+  "scan_id": "c2f1d112-2170-427a-920c-7094ab7ca89f",
+  "status": "COMPLETED",
+  "entity_count": 94,
+  "relationship_count": 93,
+  "depth": 2,
+  "module": null,
+  "updated_at": "2026-08-17T14:46:56.693805+00:00",
+  "modules_run": 57,
+  "max_depth": 1,
+  "max_entities": 500
+}

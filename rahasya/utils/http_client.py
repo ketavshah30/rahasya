@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any
 from loguru import logger
 
 import httpx
+from httpx_socks import AsyncProxyTransport
 
 from rahasya.storage.network_audit import record_audit_event
 
@@ -24,14 +25,18 @@ class StealthHTTPClient:
         timeout: float = 30.0,
         max_retries: int = 3,
         ssl_verify: bool = True,
+        request_jitter: Optional[tuple[float, float]] = (0.5, 2.0),
+        transport: Optional[httpx.AsyncBaseTransport] = None,
     ):
         self.proxy = proxy
         self.timeout = timeout
         self.max_retries = max_retries
+        self.request_jitter = request_jitter
         self._client = httpx.AsyncClient(
-            proxy=proxy,
+            proxy=proxy if transport is None else None,
             timeout=timeout,
             verify=ssl_verify,
+            transport=transport,
         )
 
     def _get_headers(self, custom_headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
@@ -50,8 +55,8 @@ class StealthHTTPClient:
         delay = 1.0
         last_exception = None
         
-        # Random delay between requests to avoid rate limits
-        await asyncio.sleep(random.uniform(0.5, 2.0))
+        if self.request_jitter is not None:
+            await asyncio.sleep(random.uniform(*self.request_jitter))
         
         for attempt in range(self.max_retries):
             request_started = time.monotonic()
@@ -102,8 +107,10 @@ class StealthHTTPClient:
                     and e.response.status_code != 429
                 ):
                     raise
+                if isinstance(e, httpx.ConnectError):
+                    raise
                 if attempt < self.max_retries - 1:
-                    await asyncio.sleep(delay)
+                    await asyncio.sleep(delay * random.uniform(0.75, 1.25))
                     delay *= 2  # Exponential backoff
         
         raise last_exception or Exception("Unknown request failure")
@@ -126,11 +133,22 @@ class TorHTTPClient(StealthHTTPClient):
     """HTTP Client that routes traffic through Tor SOCKS5 proxy."""
     def __init__(
         self,
-        tor_proxy: str = "socks5://127.0.0.1:9050",
+        tor_proxy: str = "socks5h://127.0.0.1:9050",
         timeout: float = 60.0,
         ssl_verify: bool = True,
+        request_jitter: Optional[tuple[float, float]] = (0.5, 2.0),
     ):
-        super().__init__(proxy=tor_proxy, timeout=timeout, ssl_verify=ssl_verify)
+        # python-socks performs remote hostname resolution for SOCKS5 but
+        # accepts only the socks5 scheme spelling, not the curl-style socks5h.
+        transport_url = tor_proxy.replace("socks5h://", "socks5://", 1)
+        transport = AsyncProxyTransport.from_url(transport_url)
+        super().__init__(
+            proxy=tor_proxy,
+            timeout=timeout,
+            ssl_verify=ssl_verify,
+            request_jitter=request_jitter,
+            transport=transport,
+        )
         logger.info(f"Initialized TorHTTPClient via {tor_proxy}")
 
 
