@@ -8,16 +8,20 @@ from bs4 import BeautifulSoup
 
 from rahasya.modules.base import BaseModule
 from rahasya.core.models import Entity, EntityType, SourceReliability, DarkWebMention
+from rahasya.modules.darkweb._gating import scan_has_confirmed_social_profile
 from rahasya.modules.darkweb.tor_manager import TorManager
 from rahasya.storage.network_audit import record_audit_event
 
 class OnionSearchModule(BaseModule):
     name = "OnionSearch"
     description = "Search multiple dark web engines via Tor"
-    version = "1.0.0"
-    accepts = [EntityType.PERSON, EntityType.EMAIL, EntityType.USERNAME, EntityType.PHONE, EntityType.DOMAIN]
+    version = "1.1.0"
+    # FIXES_NEW.md §H.2: dark web is a *late-stage* signal keyed off
+    # already-verified identifiers. Drop PERSON/DOMAIN — those are seed
+    # types that would fire the module immediately at depth 0.
+    accepts = [EntityType.EMAIL, EntityType.USERNAME, EntityType.PHONE]
     produces = [EntityType.DARK_WEB_MENTION]
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.tor = TorManager(
@@ -27,6 +31,11 @@ class OnionSearchModule(BaseModule):
             password=self.config.tor.password or "",
         )
         self.engines = []
+        # FIXES_NEW.md §H.2: check_tor_running() used to re-fire on every
+        # entity, adding a Tor round-trip per invocation. Cache the setup
+        # result and only re-check on TTL expiry.
+        self._tor_ok: bool = False
+        self._tor_checked_at: float = 0.0
         
     async def initialize(self):
         config_path = "data/config/onion_engines.json"
@@ -38,6 +47,17 @@ class OnionSearchModule(BaseModule):
         await super().setup()
         if not self.engines:
             await self.initialize()
+        # FIXES_NEW.md §H.2: prime the Tor-liveness cache once at setup
+        # so execute() does not pay a Tor round-trip per entity.
+        self._tor_ok = await self.tor.check_tor_running()
+        self._tor_checked_at = time.monotonic()
+
+    async def _tor_ready(self) -> bool:
+        """Return cached Tor readiness, refreshing every 5 minutes."""
+        if not self._tor_ok or (time.monotonic() - self._tor_checked_at) > 300:
+            self._tor_ok = await self.tor.check_tor_running()
+            self._tor_checked_at = time.monotonic()
+        return self._tor_ok
                 
     async def search_engine(self, engine, query, entity):
         results = []
@@ -131,10 +151,33 @@ class OnionSearchModule(BaseModule):
         return results
 
     async def execute(self, entity: Entity, scan_id: str) -> List[Entity]:
+        # FIXES_NEW.md §H.2: gate on ground-truth + prior confirmation.
+        if not getattr(entity, "is_ground_truth", False):
+            record_audit_event(
+                "module_skipped",
+                outcome="skipped",
+                provider="onionsearch",
+                entity_type=entity.entity_type.value,
+                entity_value=entity.value,
+                reason="dark_web_gated_on_ground_truth",
+            )
+            return []
+        if not scan_has_confirmed_social_profile(scan_id):
+            record_audit_event(
+                "module_skipped",
+                outcome="skipped",
+                provider="onionsearch",
+                entity_type=entity.entity_type.value,
+                entity_value=entity.value,
+                reason="dark_web_gated_on_prior_confirmation",
+                message="No confirmed SOCIAL_PROFILE has been registered on this scan yet",
+            )
+            return []
+
         if not self.engines:
             await self.initialize()
-            
-        if not await self.tor.check_tor_running():
+
+        if not await self._tor_ready():
             self.logger.warning("Tor is not running. Using fallback.")
             return []
             

@@ -18,20 +18,30 @@ from rahasya.modules.social.whatsmyname_module import WhatsMyNameModule
 from rahasya.utils.http_client import StealthHTTPClient
 
 
-def entity(entity_type=EntityType.USERNAME, value="known-user"):
+def entity(entity_type=EntityType.USERNAME, value="known-user", is_ground_truth=True):
+    # FIXES_NEW.md §F: enumerators now require is_ground_truth=True.
+    # Existing tests were written before D.3 landed; defaulting to True
+    # here matches "the test seeds the entity as if the operator supplied
+    # it directly", which is what the tests are simulating.
     return Entity(
         entity_type=entity_type,
         value=value,
         normalized_value=value.casefold(),
         source_module="test",
+        is_ground_truth=is_ground_truth,
     )
 
 
 def test_cli_commands_match_current_provider_interfaces(tmp_path):
-    maigret = MaigretModule._command("known-user", str(tmp_path))
+    # FIXES_NEW.md §F.2: MaigretModule._command is now an instance method
+    # so it can read settings.scan.maigret_top_sites at call time. Build
+    # a real module instance for the assertion.
+    maigret = MaigretModule()._command("known-user", str(tmp_path))
     assert maigret[maigret.index("--json") + 1] == "ndjson"
     assert maigret[maigret.index("--folderoutput") + 1] == str(tmp_path)
     assert maigret[maigret.index("--retries") + 1] == "1"
+    # Default cap 500 per FIXES_NEW.md §F.2.
+    assert maigret[maigret.index("--top-sites") + 1] == "500"
 
     sherlock = SherlockModule._command("known-user", str(tmp_path))
     assert "--json" not in sherlock
@@ -78,7 +88,11 @@ def test_module_timeouts_rates_and_http_profiles():
     assert ExifModule.rate_limit == 0.0
     assert ImageHashModule.rate_limit == 0.0
     assert WhatsMyNameModule.request_jitter is None
-    assert ArchiveModule.http_max_retries == 5
+    # FIXES_NEW.md §H.1: Wayback retries dropped from 5 → 2 (three of the
+    # five retries were wasted on Archive.org's temporary degradation).
+    assert ArchiveModule.http_max_retries == 2
+    # FIXES_NEW.md §H.1: polite pacing per Archive.org's own request.
+    assert ArchiveModule.rate_limit == 0.5
 
 
 def test_intelx_tier_mapping_and_compatibility_env(monkeypatch):
@@ -128,39 +142,71 @@ async def test_hibp_passwords_known_hash():
 
 @pytest.mark.asyncio
 async def test_ahmia_parses_html_results():
-    html = """
-    <ul><li class="result"><h4><a href="/search/redirect?redirect_url=http%3A%2F%2Fexample.onion">
-    Example Onion</a></h4><p>Example description</p></li></ul>
-    """
+    # FIXES_NEW.md §H.2: Ahmia now requires at least one confirmed
+    # SOCIAL_PROFILE on the scan before it will fire. Prime the shared
+    # scoreboard so the parser can be exercised in isolation.
+    from rahasya.modules.darkweb._gating import (
+        clear_scan,
+        note_confirmed_social_profile,
+    )
 
-    class FakeClient:
-        async def get(self, url, **kwargs):
-            return httpx.Response(200, request=httpx.Request("GET", url), text=html)
+    scan_id = "scan-ahmia"
+    note_confirmed_social_profile(scan_id, "twitter")
+    try:
+        html = """
+        <ul><li class="result"><h4><a href="/search/redirect?redirect_url=http%3A%2F%2Fexample.onion">
+        Example Onion</a></h4><p>Example description</p></li></ul>
+        """
 
-    module = AhmiaModule()
-    module.http_client = FakeClient()
-    results = await module.execute(entity(), "scan-ahmia")
-    assert len(results) == 1
-    assert results[0].source_url == "http://example.onion"
-    assert results[0].is_onion is True
+        class FakeClient:
+            async def get(self, url, **kwargs):
+                return httpx.Response(200, request=httpx.Request("GET", url), text=html)
+
+        module = AhmiaModule()
+        module.http_client = FakeClient()
+        results = await module.execute(entity(EntityType.EMAIL, "known@example.com"), scan_id)
+        assert len(results) == 1
+        assert results[0].source_url == "http://example.onion"
+        assert results[0].is_onion is True
+    finally:
+        clear_scan(scan_id)
 
 
 @pytest.mark.asyncio
 async def test_ahmia_disables_itself_after_repeated_degraded_responses():
-    class EmptyClient:
-        def __init__(self):
-            self.calls = 0
+    # FIXES_NEW.md §H.2: threshold raised from 2 → 4 with a 5-minute
+    # time-based reset. Prime the gating scoreboard and confirm the
+    # module still trips after MAX_DEGRADED_RESPONSES (=4) consecutive
+    # empty responses.
+    from rahasya.modules.darkweb._gating import (
+        clear_scan,
+        note_confirmed_social_profile,
+    )
 
-        async def get(self, url, **kwargs):
-            self.calls += 1
-            return httpx.Response(200, request=httpx.Request("GET", url), text="<html></html>")
+    scan_id = "scan-degraded"
+    note_confirmed_social_profile(scan_id, "twitter")
+    try:
+        class EmptyClient:
+            def __init__(self):
+                self.calls = 0
 
-    client = EmptyClient()
-    module = AhmiaModule()
-    module.http_client = client
-    for _ in range(4):
-        assert await module.execute(entity(), "scan-degraded") == []
-    assert client.calls == 3
+            async def get(self, url, **kwargs):
+                self.calls += 1
+                return httpx.Response(
+                    200, request=httpx.Request("GET", url), text="<html></html>"
+                )
+
+        client = EmptyClient()
+        module = AhmiaModule()
+        module.http_client = client
+        # After 5 attempts the counter exceeds MAX_DEGRADED_RESPONSES (=4)
+        # and the scan is disabled from further Ahmia dispatches.
+        for _ in range(6):
+            assert await module.execute(entity(EntityType.EMAIL, "known@example.com"), scan_id) == []
+        # 5 attempts before the disable trip; the 6th is short-circuited.
+        assert client.calls == 5
+    finally:
+        clear_scan(scan_id)
 
 
 @pytest.mark.asyncio
@@ -188,6 +234,9 @@ async def test_connect_error_is_terminal_and_jitter_can_be_disabled():
 
 @pytest.mark.asyncio
 async def test_whatsmyname_opens_per_host_circuit_after_three_failures(monkeypatch):
+    # FIXES_NEW.md §F.3: WhatsMyName now requires is_ground_truth=True on
+    # USERNAME entities. The test helper defaults to True; the circuit
+    # behavior we're verifying is unchanged.
     module = WhatsMyNameModule()
     module.sites_data = {
         "sites": [

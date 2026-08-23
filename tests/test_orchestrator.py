@@ -24,17 +24,28 @@ def test_generate_seed_entities(orchestrator, sample_scan_request):
 
 def test_seed_from_email(orchestrator):
     if not HAS_ORCH: return
+    # FIXES_NEW.md §D.1: an email seed no longer derives a USERNAME.
+    # The local part of an email is not a person's handle on any platform;
+    # reverse-lookup modules (holehe/Gravatar/GitHub-email) are the correct
+    # pivot.
     seeds = orchestrator.seed_from_email("test@example.com")
     types = [s.entity_type for s in seeds]
     assert EntityType.EMAIL in types
-    assert EntityType.USERNAME in types
+    assert EntityType.USERNAME not in types
+    # And every seed must be ground-truth (user-supplied).
+    assert all(getattr(s, "is_ground_truth", False) for s in seeds)
+
 
 def test_seed_from_name(orchestrator):
     if not HAS_ORCH: return
+    # FIXES_NEW.md §D.2: a name seed no longer emits USERNAME variants at
+    # confidence=1.0. Variants are candidate hypotheses inside a name-
+    # oriented reverse-lookup module, not seeds.
     seeds = orchestrator.seed_from_name("John Doe")
     types = [s.entity_type for s in seeds]
     assert EntityType.PERSON in types
-    assert EntityType.USERNAME in types
+    assert EntityType.USERNAME not in types
+    assert all(getattr(s, "is_ground_truth", False) for s in seeds)
 
 def test_seed_from_phone(orchestrator):
     if not HAS_ORCH: return

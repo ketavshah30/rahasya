@@ -27,12 +27,23 @@ from rahasya.core.models import (
 )
 from rahasya.core.events import EventBus, EventType, Event
 from rahasya.core.entity_queue import EntityQueue
+from rahasya.core.related_persons import select_related_persons
+from rahasya.core.budget import (
+    calls_used as _budget_calls_used,
+    clear_scan as _budget_clear_scan,
+    is_tripped as _budget_is_tripped,
+    register_scan as _budget_register_scan,
+)
 from rahasya.modules import ModuleRegistry
+from rahasya.modules.darkweb._gating import (
+    clear_scan as _dw_clear_scan,
+    note_confirmed_social_profile as _dw_note_confirmed_social_profile,
+)
 from rahasya.correlation.graph_manager import GraphManager
 from rahasya.correlation.entity_resolver import EntityResolver
 from rahasya.utils.logging import get_logger
 from rahasya.utils.validators import (
-    normalize_email, normalize_phone, generate_username_variants, normalize_name,
+    normalize_email, normalize_phone, normalize_name,
 )
 from rahasya.storage.scan_store import ScanStore
 from rahasya.metrics import ACTIVE_SCANS, SCANS_COMPLETED, SCANS_STARTED
@@ -96,6 +107,9 @@ class Orchestrator:
             "modules_run": 0,
         }
 
+        # FIXES_NEW.md §J.2 — arm the network-call budget for this scan.
+        _budget_register_scan(scan_id, int(self.config.scan.max_network_calls))
+
         self.logger.info(f"Starting scan {scan_id[:8]}...")
         self._audit(
             scan_id,
@@ -148,12 +162,27 @@ class Orchestrator:
         state = self._scan_state[scan_id]
 
         try:
-            # Process in BFS order by depth
+            # Process in BFS order by depth.
+            #
+            # FIXES_NEW.md §G.3 / §J.1: the outer loop terminates when a
+            # full pass promotes ZERO new ground-truth facts, OR any hard
+            # budget is hit (time, entity count, network calls, depth cap).
+            # The dashboard's `Max Recursion Depth` slider becomes an
+            # UPPER BOUND / SAFETY CAP — the convergence check usually
+            # terminates before we reach it.
             queue: List[Entity] = list(initial_entities)
             current_depth = 0
             max_depth = self.config.scan.max_depth
             max_entities = self.config.scan.max_entities
             max_time = self.config.scan.max_time_minutes * 60  # seconds
+
+            # Seed ground-truth baseline for §J.1.
+            state["ground_truth_facts"] = sum(
+                1 for entity in state["entities"]
+                if getattr(entity, "is_ground_truth", False)
+            )
+            state["passes_run"] = 0
+            state["converged_by"] = None
 
             while queue and current_depth <= max_depth:
                 # Check time limit
@@ -161,12 +190,30 @@ class Orchestrator:
                 if elapsed >= max_time:
                     self.logger.warning(f"Scan {scan_id[:8]} hit time limit ({max_time}s)")
                     self._audit(scan_id, "scan_limit", outcome="stopped", limit="time", limit_value=max_time)
+                    state["converged_by"] = "time_limit"
                     break
 
                 # Check entity limit
                 if state["entity_count"] >= max_entities:
                     self.logger.warning(f"Scan {scan_id[:8]} hit entity limit ({max_entities})")
                     self._audit(scan_id, "scan_limit", outcome="stopped", limit="entities", limit_value=max_entities)
+                    state["converged_by"] = "entity_limit"
+                    break
+
+                # FIXES_NEW.md §J.2 — network-call budget check.
+                if _budget_is_tripped(scan_id):
+                    self.logger.warning(
+                        f"Scan {scan_id[:8]} exhausted its network-call budget"
+                    )
+                    self._audit(
+                        scan_id,
+                        "scan_limit",
+                        outcome="stopped",
+                        limit="network_calls",
+                        limit_value=self.config.scan.max_network_calls,
+                        calls_used=_budget_calls_used(scan_id),
+                    )
+                    state["converged_by"] = "network_budget"
                     break
 
                 self.logger.info(
@@ -296,6 +343,19 @@ class Orchestrator:
                 queue = next_queue
                 current_depth += 1
                 state["depth_reached"] = current_depth
+                state["passes_run"] = state.get("passes_run", 0) + 1
+
+                # FIXES_NEW.md §J.1: recompute the ground-truth fact count
+                # AFTER this pass finished. If a full pass produced zero
+                # new ground-truth facts, the scan has converged and we
+                # stop even if the depth cap has not been hit.
+                new_gt_count = sum(
+                    1 for entity in state["entities"]
+                    if getattr(entity, "is_ground_truth", False)
+                )
+                gt_delta = new_gt_count - state.get("ground_truth_facts", 0)
+                state["ground_truth_facts"] = new_gt_count
+
                 self._audit(
                     scan_id,
                     "depth_completed",
@@ -303,8 +363,38 @@ class Orchestrator:
                     depth=current_depth - 1,
                     entity_count=state["entity_count"],
                     relationship_count=len(state["relationships"]),
+                    ground_truth_facts=new_gt_count,
+                    ground_truth_delta=gt_delta,
                 )
                 self._persist_state(scan_id, depth=current_depth, module=None)
+
+                # Convergence check.
+                if gt_delta <= 0 and not next_queue:
+                    state["converged_by"] = "no_new_info"
+                    self._audit(
+                        scan_id,
+                        "scan_converged",
+                        outcome="success",
+                        reason="no_new_info",
+                        passes_run=state["passes_run"],
+                        ground_truth_facts=new_gt_count,
+                    )
+                    break
+
+            # If the loop exited because we ran out of queue OR hit the
+            # depth cap without setting converged_by, tag it appropriately.
+            if not state.get("converged_by"):
+                if current_depth > max_depth:
+                    state["converged_by"] = "depth_cap"
+                else:
+                    state["converged_by"] = "no_new_info"
+
+            # FIXES_NEW.md §G.2: related-person expansion — after the
+            # primary target converges, pick up to N candidate related
+            # persons and record who won plus who lost. Actual secondary
+            # PersonProfile scans are gated behind related_depth (default 1
+            # = no further expansion) and are deferred to a future pass.
+            self._select_and_record_related_persons(scan_id)
 
             state["status"] = ScanStatus.COMPLETED
             state["completed_at"] = datetime.now(timezone.utc)
@@ -358,6 +448,13 @@ class Orchestrator:
                 SCANS_COMPLETED.labels(status=state["status"].value).inc()
             if ACTIVE_SCANS:
                 ACTIVE_SCANS.dec()
+            # FIXES_NEW.md §H.2 hygiene: drop the dark-web scoreboard entry
+            # for this scan so long-lived orchestrator processes don't leak
+            # memory between scans.
+            _dw_clear_scan(scan_id)
+            # FIXES_NEW.md §J.2 hygiene: also clear network-budget state.
+            state["network_calls"] = _budget_calls_used(scan_id)
+            _budget_clear_scan(scan_id)
             await self.event_bus.close()
 
     async def _register_entity(self, scan_id: str, entity: Entity) -> bool:
@@ -380,6 +477,38 @@ class Orchestrator:
         state["entities"].append(entity)
         state["entity_count"] += 1
 
+        # FIXES_NEW.md §H.2: notify the dark-web gating scoreboard whenever
+        # a ground-truth SOCIAL_PROFILE lands, so Ahmia/OnionSearch can
+        # start firing on subsequent passes.
+        if (
+            entity.entity_type == EntityType.SOCIAL_PROFILE
+            and getattr(entity, "is_ground_truth", False)
+        ):
+            _dw_note_confirmed_social_profile(
+                scan_id,
+                platform=str(getattr(entity, "attests_platform", "") or ""),
+            )
+
+        # FIXES_NEW.md §J.3: per-fact attribution audit — every promoted
+        # ground-truth fact gets one row in the audit log with
+        # (fact_type, value, evidence_urls, via_module, parent_entity_id).
+        # This is the raw data the eventual CIA report will consume for
+        # its "how do we know this?" section.
+        if getattr(entity, "is_ground_truth", False):
+            self._audit(
+                scan_id,
+                "fact_promoted",
+                outcome="success",
+                source_module=entity.source_module,
+                fact_type=entity.entity_type.value,
+                fact_value=entity.value,
+                fact_id=entity.id,
+                evidence_urls=list(getattr(entity, "evidence_urls", []) or []),
+                attests_platform=getattr(entity, "attests_platform", None),
+                parent_entity_id=entity.parent_entity_id,
+                confidence=entity.confidence,
+            )
+
         # Add to graph
         await self.graph.add_node(entity)
 
@@ -400,25 +529,91 @@ class Orchestrator:
 
         return True
 
+    def _select_and_record_related_persons(self, scan_id: str) -> None:
+        """FIXES_NEW.md §G.2: pick up to N related-person candidates.
+
+        Selection rule (Option A): top N by number of distinct providers
+        attesting the relationship, then by relationship strength
+        (PARENT_OF > SIBLING_OF > SPOUSE_OF > KNOWS), then by first-seen
+        timestamp. Losers are logged as runners_up so the operator can
+        audit who was rejected.
+
+        Actually launching secondary PersonProfile scans is deferred to a
+        later workstream — this pass only *records* the picks and their
+        evidence. That is enough to unblock:
+          - the audit trail (§G.2 DoD row 1),
+          - the ScanStats.related_persons_selected counter (§J.1),
+          - the dashboard TODO (§G.2 workstream K) that will surface the
+            picks for operator override.
+        """
+        state = self._scan_state[scan_id]
+        cap = int(self.config.scan.max_related_persons)
+        if cap <= 0:
+            return
+
+        # Seed IDs = every entity that came from the initial ScanRequest.
+        seed_ids = {
+            entity.id for entity in state["entities"]
+            if (entity.metadata or {}).get("is_seed") is True
+        }
+        candidates = select_related_persons(
+            entities=state["entities"],
+            relationships=state["relationships"],
+            seed_entity_ids=seed_ids,
+            cap=cap,
+        )
+        state["related_persons_selected"] = len(candidates)
+        if not candidates:
+            return
+
+        for candidate in candidates:
+            self._audit(
+                scan_id,
+                "related_person_selected",
+                outcome="success",
+                entity_id=candidate.entity_id,
+                entity_value=candidate.entity.value,
+                evidence_score=candidate.evidence_score,
+                top_strength=candidate.top_strength,
+                edge_types=sorted({edge.relationship_type.value for edge in candidate.edges}),
+                first_seen=candidate.first_seen.isoformat(),
+            )
+
     def _generate_seed_entities(
         self, request: ScanRequest, scan_id: str
     ) -> List[Entity]:
         """Convert raw ScanRequest fields into seed Entity objects.
+
+        Per FIXES_NEW.md Workstream D:
+            - D.1: Emails NO LONGER derive a UsernameEntity from the local
+              part. `xyz@example.com` does not imply Instagram handle `xyz`.
+            - D.2: Names NO LONGER emit UsernameEntity variants as seeds.
+              Variants remain available (via generate_username_variants) as
+              *candidate* generators inside name-oriented reverse-lookup
+              modules, but they never enter the seed set at
+              confidence=1.0/HIGH.
+            - D.3: Every seed is marked is_ground_truth=True because the
+              user supplied it directly. Ground truth is the ONLY class of
+              fact allowed to bypass corroboration in downstream modules
+              (see Workstream F guards on Sherlock/Maigret/WhatsMyName).
 
         Args:
             request: User-provided target information.
             scan_id: Scan identifier for metadata.
 
         Returns:
-            List of seed entities.
+            List of seed entities. All are ground-truth (user-supplied).
         """
         seeds: List[Entity] = []
+        # User-supplied identifiers are ground truth by definition.
         common = {
             "source_module": "seed",
             "scan_id": scan_id,
             "source_reliability": SourceReliability.HIGH,
             "confidence": 1.0,
             "depth": 0,
+            "is_ground_truth": True,
+            "evidence_urls": [],
             "metadata": {"scan_id": scan_id, "is_seed": True},
         }
 
@@ -431,16 +626,13 @@ class Orchestrator:
                 name=name_clean,
                 **common,
             ))
-            # Generate username variants from name
-            variants = generate_username_variants(request.name)
-            for variant in variants[:5]:  # Limit to top 5 variants
-                seeds.append(UsernameEntity(
-                    entity_type=EntityType.USERNAME,
-                    value=variant,
-                    normalized_value=variant.lower(),
-                    handle=variant,
-                    **common,
-                ))
+            # D.2: DO NOT emit UsernameEntity variants from a name as seeds.
+            # Variants are candidate hypotheses, not ground truth. They will
+            # be produced by name-oriented reverse-lookup modules in
+            # Workstream E with source_reliability=LOW, confidence<=0.4, and
+            # is_ground_truth=False so that Sherlock/Maigret/WhatsMyName
+            # (which now require is_ground_truth=True per F.1-F.3) will not
+            # fire on them.
 
         if request.email:
             email_clean = request.email.strip().lower()
@@ -453,16 +645,13 @@ class Orchestrator:
                 domain=domain,
                 **common,
             ))
-            # Extract username from email as potential social handle
-            local_part = email_clean.split("@")[0] if "@" in email_clean else ""
-            if local_part and len(local_part) >= 3:
-                seeds.append(UsernameEntity(
-                    entity_type=EntityType.USERNAME,
-                    value=local_part,
-                    normalized_value=local_part,
-                    handle=local_part,
-                    **common,
-                ))
+            # D.1: DO NOT derive a UsernameEntity from email.split("@")[0].
+            # The local part of an email is not the person's handle on any
+            # given platform; treating it as ground truth was the root of
+            # the "Sherlock/Maigret spraying a bogus handle across 3000
+            # sites" behavior. Reverse-lookup modules (holehe, Gravatar,
+            # GitHub-email search — Workstream E) are the correct way to
+            # discover platform handles from an email.
 
         if request.phone:
             phone_norm = normalize_phone(request.phone)
@@ -563,6 +752,18 @@ class Orchestrator:
 
     @staticmethod
     def _build_seed_relationships(seeds: List[Entity]) -> List[Relationship]:
+        """Wire user-supplied identifiers to the PERSON seed.
+
+        Per FIXES_NEW.md Workstream D.4: with the email→username and
+        name→username seed-derivations removed, there are no synthetic
+        USES_USERNAME edges from the seed set. The seed graph is exactly:
+            PersonEntity --{HAS_EMAIL|HAS_PHONE|USES_USERNAME|...}--> id
+        for every user-supplied identifier the ScanRequest carried.
+
+        Returns exactly N-1 relationships for a seed list of N entities
+        (where 1 is PERSON). Returns [] if no PERSON seed is present
+        (e.g. email-only or username-only scans, which are valid).
+        """
         people = [entity for entity in seeds if entity.entity_type == EntityType.PERSON]
         if not people:
             return []
@@ -577,6 +778,9 @@ class Orchestrator:
                 EntityType.LOCATION,
                 EntityType.PHOTO,
             }:
+                # Defensive: unknown pair-types fall through to LINKED_TO,
+                # which we do not want on the seed graph unless the child
+                # is a semantic "linked" type (photo taken at location, etc.)
                 continue
             relationships.append(Relationship(
                 source_id=person.id,
@@ -623,6 +827,12 @@ class Orchestrator:
                 modules_run=state["modules_run"],
                 depth_reached=state["depth_reached"],
                 duration_seconds=elapsed,
+                # FIXES_NEW.md §J.1 — surface convergence stats to callers.
+                passes_run=state.get("passes_run", 0),
+                converged_by=state.get("converged_by"),
+                ground_truth_facts=state.get("ground_truth_facts", 0),
+                network_calls=state.get("network_calls", 0),
+                related_persons_selected=state.get("related_persons_selected", 0),
             ),
             request=state["request"],
             error=state["error"],

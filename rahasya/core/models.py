@@ -50,7 +50,23 @@ class Entity(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     parent_entity_id: Optional[str] = None
     depth: int = 0
-    
+
+    # --- Ground-truth attribution (FIXES_NEW.md §D.3) ---
+    # True only when this entity was either user-supplied OR directly attested
+    # by a high-reliability provider response for the queried identifier.
+    # Guessed / derived / enumerated entities MUST leave this False. Downstream
+    # routing (e.g. Sherlock/Maigret/WhatsMyName in Workstream F) refuses to
+    # act on non-ground-truth identifiers.
+    is_ground_truth: bool = False
+    # Raw provider URL(s) that attest this fact. Populated by producers when
+    # is_ground_truth is set; consumed by the network-audit "fact_promoted"
+    # trail (Workstream J.3).
+    evidence_urls: List[str] = Field(default_factory=list)
+    # For USERNAME entities: which platform the handle is verified on
+    # (e.g. "github", "twitter"). None for other entity types or when the
+    # handle is not platform-scoped.
+    attests_platform: Optional[str] = None
+
     model_config = ConfigDict(frozen=False, extra='allow')
 
 
@@ -294,6 +310,21 @@ class ScanStats(BaseModel):
     modules_run: int = 0
     depth_reached: int = 0
     duration_seconds: float = 0.0
+    # FIXES_NEW.md §J.1 — how many convergence passes actually ran, and why
+    # the scan stopped. `depth_cap` is kept for backwards compatibility with
+    # the dashboard slider (it becomes a safety cap, not the termination
+    # trigger).
+    passes_run: int = 0
+    converged_by: Optional[str] = Field(
+        default=None,
+        description=(
+            "Termination reason: no_new_info | time_limit | entity_limit | "
+            "network_budget | depth_cap"
+        ),
+    )
+    ground_truth_facts: int = 0
+    network_calls: int = 0
+    related_persons_selected: int = 0
 
 
 class ScanResult(BaseModel):

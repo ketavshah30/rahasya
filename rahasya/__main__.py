@@ -226,6 +226,29 @@ def worker(concurrency) -> None:
         console.print("\n[dim]Worker stopped.[/dim]")
 
 
+@cli.command()
+def health() -> None:
+    """Print the provider-health matrix (FIXES_NEW.md §I.4).
+
+    Reports which reverse-lookup CLIs are on PATH, which API keys are
+    configured, and whether Tor is enabled. Green/yellow/red per provider,
+    with a one-line reason so operators can debug "why isn't module X
+    running?" without reading module code.
+    """
+    from rahasya.core.health import format_health_matrix, probe_provider_health
+    from rahasya.config import settings as _settings
+
+    async def _run():
+        matrix = await probe_provider_health(_settings)
+        console.print("[bold cyan]Provider Health Matrix[/bold cyan]")
+        console.print(format_health_matrix(matrix))
+        # Non-zero exit code if any red rows exist so CI can gate on it.
+        return any(status.status == "red" for status in matrix.values())
+
+    reds = asyncio.run(_run())
+    sys.exit(1 if reds else 0)
+
+
 @cli.command("init-db")
 def init_db() -> None:
     """Upgrade the database schema using Alembic migrations."""

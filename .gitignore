@@ -38,4 +38,5 @@ ENV/
 data/cache/
 data/reports/
 data/scans/
+data/state/
 *.db

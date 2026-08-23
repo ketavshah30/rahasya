@@ -106,12 +106,30 @@ also verifies that current Maigret and Sherlock executables are installed.
 | `DEBUG` | Debug mode toggle |
 
 ## Module Overview
+
+### Reverse-lookup (email/phone → real identity) — free-tier default
 | Module | Input | Output | Requires | Notes |
 | --- | --- | --- | --- | --- |
-| Social | Username, Name | Profiles, Aliases | - | Uses Maigret, Sherlock, WhatsMyName |
-| Breach | Email, Domain, Password hash | Breaches | API Keys for HIBP/IntelX/LeakLookup | Includes free HIBP Pwned Passwords lookup |
-| DarkWeb | Email, Alias | Onion URLs | Tor | Uses Ahmia, OnionSearch |
-| Multimedia | Images | EXIF Data, Hashes | - | Analyzes metadata and similarities |
+| LookupByEmail | Email | Social profiles, usernames | `holehe` on PATH | Reverse-probes 120+ sites' reset endpoints. Ground-truth. |
+| LookupByPhone | Phone | Social profiles, phone-metadata | `ignorant` on PATH | Reverse-probes reset endpoints; `phonenumbers` optional. |
+| GravatarLookup | Email | Person, verified social profiles, photo | - | Highest-precision keyless email→identity pivot. |
+| GitHubEmailSearch | Email | GitHub username, person | - (10 req/min; set `GITHUB_TOKEN` for 30) | Commit-search API attests email→login. |
+| GitHubProfileScrape | Social profile (github) | Name, email, twitter handle, blog, location | - | Fires on any GitHub URL from any source. |
+| RecoveryHintProbe | Email, Phone | Masked recovery-email/phone hints | - | Feeds `SHARES_RECOVERY` / `ALT_ACCOUNT_OF` edges (§G.1). |
+
+### Social enumerators (username → other platforms)
+Sherlock / Maigret / WhatsMyName **only** run on ground-truth `USERNAME` entities (user-supplied handles, or handles a reverse-lookup module verified). They no longer accept emails and no longer `.split("@")[0]` them (FIXES_NEW.md §F).
+
+### Optional keyed / late-stage modules
+| Module | Input | Requires | Notes |
+| --- | --- | --- | --- |
+| HIBP | Email, Domain, Password hash | `API_KEYS__HIBP` | Optional. Adds named-breach attribution. Without a key holehe still detects the same accounts. |
+| HIBPPasswords | Password | - | Keyless. Always runs. |
+| IntelX / LeakLookup | Email, Domain | Respective keys | Optional. |
+| HunterIOReverse | Email | `API_KEYS__HUNTER` | Optional. Email → company + co-worker candidates. Feeds §G related-person expansion. |
+| Ahmia / OnionSearch | Email, Username, Phone | Late-stage (see §H.2) | Fires only after the scan has ≥1 confirmed `SOCIAL_PROFILE`. OnionSearch additionally needs Tor. |
+| WaybackMachine | Social profile, Domain | - | Fires only on 404/410/private/suspended profiles (§H.1). Evidence preservation, not general crawling. |
+| Multimedia (EXIF / ImageHash / LiveProbe) | Photo, Social profile | - | LiveProbe annotates each profile's live-status; used to gate Wayback. |
 
 ## Dashboard
 The Rahasya dashboard features a CIA-terminal themed interface providing actionable insights. Key pages include:

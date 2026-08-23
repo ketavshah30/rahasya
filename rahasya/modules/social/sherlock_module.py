@@ -18,7 +18,10 @@ class SherlockModule(BaseModule):
     name = "Sherlock"
     description = "Hunt down social media accounts by username"
     version = "1.0.0"
-    accepts = [EntityType.USERNAME, EntityType.EMAIL]
+    # FIXES_NEW.md F.1: Sherlock is a username enumerator. It must NOT accept
+    # EMAIL and silently `.split("@")[0]` it — that was the root of the
+    # "email local-part sprayed across 3000 sites" bug.
+    accepts = [EntityType.USERNAME]
     produces = [EntityType.SOCIAL_PROFILE, EntityType.URL]
     rate_limit = 0.0
 
@@ -50,8 +53,36 @@ class SherlockModule(BaseModule):
         return rows
 
     async def execute(self, entity: Entity, scan_id: str) -> List[Entity]:
+        # FIXES_NEW.md F.1: only fire on ground-truth usernames. A username
+        # that was guessed (name-variant, email local-part, LOW-confidence
+        # candidate from a lookup module) MUST NOT be sprayed across
+        # thousands of sites. Reverse-lookup modules (Workstream E) are the
+        # correct pivot from an email/phone to a real handle.
+        if entity.entity_type != EntityType.USERNAME:
+            record_audit_event(
+                "module_skipped",
+                outcome="skipped",
+                provider="sherlock",
+                entity_type=entity.entity_type.value,
+                entity_value=entity.value,
+                reason="wrong_entity_type",
+                message="Sherlock only accepts USERNAME entities",
+            )
+            return []
+        if not getattr(entity, "is_ground_truth", False):
+            record_audit_event(
+                "module_skipped",
+                outcome="skipped",
+                provider="sherlock",
+                entity_type=entity.entity_type.value,
+                entity_value=entity.value,
+                reason="candidate_username_not_corroborated",
+                message="Sherlock refuses to run on non-ground-truth handles",
+            )
+            return []
+
         results: List[Entity] = []
-        target = entity.value.split("@", 1)[0] if entity.entity_type == EntityType.EMAIL else entity.value
+        target = entity.value
         tmpdir = tempfile.mkdtemp(prefix=f"sherlock_{scan_id}_")
 
         try:

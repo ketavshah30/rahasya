@@ -14,7 +14,10 @@ class WhatsMyNameModule(BaseModule):
     name = "WhatsMyName"
     description = "Username enumeration using WhatsMyName data"
     version = "1.0.0"
-    accepts = [EntityType.USERNAME, EntityType.EMAIL]
+    # FIXES_NEW.md F.3: username enumerator, USERNAME only. Same rationale
+    # as Sherlock/Maigret: email local-parts and name variants are not
+    # ground-truth handles and MUST NOT be sprayed across every site.
+    accepts = [EntityType.USERNAME]
     produces = [EntityType.SOCIAL_PROFILE, EntityType.URL]
     
     DATA_URL = "https://raw.githubusercontent.com/WebBreacher/WhatsMyName/main/wmn-data.json"
@@ -97,20 +100,50 @@ class WhatsMyNameModule(BaseModule):
         return None
         
     async def execute(self, entity: Entity, scan_id: str) -> List[Entity]:
+        # FIXES_NEW.md F.3: only fire on ground-truth usernames.
+        if entity.entity_type != EntityType.USERNAME:
+            record_audit_event(
+                "module_skipped",
+                outcome="skipped",
+                provider="whatsmyname",
+                entity_type=entity.entity_type.value,
+                entity_value=entity.value,
+                reason="wrong_entity_type",
+                message="WhatsMyName only accepts USERNAME entities",
+            )
+            return []
+        if not getattr(entity, "is_ground_truth", False):
+            record_audit_event(
+                "module_skipped",
+                outcome="skipped",
+                provider="whatsmyname",
+                entity_type=entity.entity_type.value,
+                entity_value=entity.value,
+                reason="candidate_username_not_corroborated",
+                message="WhatsMyName refuses to run on non-ground-truth handles",
+            )
+            return []
+
         if not self.sites_data:
             await self.initialize()
-            
+
         if not self.sites_data:
             return []
-            
+
         results: List[Entity] = []
         target = entity.value
-        if entity.entity_type == EntityType.EMAIL:
-            target = target.split("@")[0]
-            
+        # (No more email split-hack: F.3 restricts inputs to USERNAME.)
+
         sites = self.sites_data.get("sites", [])
-        
-        semaphore = asyncio.Semaphore(150)
+
+        # FIXES_NEW.md F.3: Semaphore(150) was too aggressive and a large
+        # part of the "too many network requests failing" complaint. Drop
+        # to a safe default of 32 and make it configurable through
+        # settings.scan.whatsmyname_concurrency.
+        concurrency = getattr(self.config.scan, "whatsmyname_concurrency", 32)
+        if not isinstance(concurrency, int) or concurrency <= 0:
+            concurrency = 32
+        semaphore = asyncio.Semaphore(concurrency)
         host_failures: Dict[str, int] = {}
         blocked_hosts = set()
         circuit_lock = asyncio.Lock()

@@ -70,6 +70,47 @@ class ScanSettings(BaseModel):
     poll_interval_seconds: int = Field(
         default=2, ge=1, description="Dashboard polling interval for active scans",
     )
+    # --- FIXES_NEW.md F.2 / F.3 tuning knobs ---
+    maigret_top_sites: int = Field(
+        default=500,
+        description=(
+            "Maigret --top-sites value. 500 keeps default scans under ~3 min "
+            "at <20% failure rate. Set to 0 (or negative) to fall through to "
+            "the full 3000-site set for --deep scans."
+        ),
+    )
+    whatsmyname_concurrency: int = Field(
+        default=32, gt=0,
+        description=(
+            "WhatsMyName per-scan asyncio Semaphore ceiling. Previous 150 "
+            "was a large part of the 'too many failing requests' complaint."
+        ),
+    )
+    # --- FIXES_NEW.md §G.2 / §J tuning knobs ---
+    max_related_persons: int = Field(
+        default=3, ge=0,
+        description=(
+            "Hard cap on how many *related* persons a single scan will "
+            "expand into secondary PersonProfile passes. Operator decision "
+            "in FIXES_NEW.md §5 row 3."
+        ),
+    )
+    max_related_depth: int = Field(
+        default=1, ge=0,
+        description=(
+            "How many hops of related-person expansion are allowed. 1 = "
+            "related persons never spawn *further* related persons. "
+            "Operator decision in §5 row 2."
+        ),
+    )
+    max_network_calls: int = Field(
+        default=5000, gt=0,
+        description=(
+            "Global network-call budget per scan. When exceeded, the "
+            "scan terminates with converged_by='network_budget'. See "
+            "FIXES_NEW.md §J.2."
+        ),
+    )
 
 
 class StorageSettings(BaseModel):
@@ -101,6 +142,10 @@ class APIKeys(BaseModel):
     leaklookup: Optional[str] = Field(default=None, description="Leak-Lookup API key")
     shodan: Optional[str] = Field(default=None, description="Shodan API key")
     virustotal: Optional[str] = Field(default=None, description="VirusTotal API key")
+    # FIXES_NEW.md §E.5 / §I.3: Hunter.io API key for the HunterIOReverse
+    # module. Optional — ties email ↔ company domain and feeds co-worker
+    # candidates for related-person expansion (§G).
+    hunter: Optional[str] = Field(default=None, description="Hunter.io API key (optional)")
     hibp_keys: List[str] = Field(default_factory=list, description="Rotating HIBP API-key pool")
     intelx_keys: List[str] = Field(default_factory=list, description="Rotating Intelligence X API-key pool")
     intelx_tier: Optional[Literal["public", "free", "paid"]] = Field(

@@ -25,13 +25,22 @@ class MaigretModule(BaseModule):
     name = "Maigret"
     description = "Username enumerator across 3000+ sites"
     version = "1.0.0"
-    accepts = [EntityType.USERNAME, EntityType.EMAIL, EntityType.PERSON]
+    # FIXES_NEW.md F.2: Maigret is a username enumerator, not a
+    # generic person/email discovery tool. Accepting EMAIL / PERSON was
+    # what caused the "spray 3000 sites with a guessed handle" problem.
+    accepts = [EntityType.USERNAME]
     produces = [EntityType.SOCIAL_PROFILE, EntityType.URL, EntityType.EMAIL, EntityType.USERNAME]
     rate_limit = 0.0
 
-    @staticmethod
-    def _command(target: str, tmpdir: str) -> List[str]:
-        return [
+    def _command(self, target: str, tmpdir: str) -> List[str]:
+        # FIXES_NEW.md F.2: Maigret's 3000-site fanout is a large part of the
+        # "too many failing requests" problem. Default to the top-500 sites
+        # and expose it as settings.scan.maigret_top_sites. Deep scans
+        # (settings.scan.maigret_top_sites <= 0) fall through to the full
+        # site set. Explicit user-supplied usernames still get bounded
+        # coverage unless the operator opts into a deep pass.
+        top_sites = getattr(self.config.scan, "maigret_top_sites", 500)
+        cmd = [
             "maigret", target,
             "--json", "ndjson",
             "--folderoutput", tmpdir,
@@ -39,6 +48,9 @@ class MaigretModule(BaseModule):
             "--timeout", "10",
             "--retries", "1",
         ]
+        if isinstance(top_sites, int) and top_sites > 0:
+            cmd.extend(["--top-sites", str(top_sites)])
+        return cmd
 
     @staticmethod
     def _report_files(tmpdir: str) -> Iterable[Path]:
@@ -77,8 +89,32 @@ class MaigretModule(BaseModule):
         return records
 
     async def execute(self, entity: Entity, scan_id: str) -> List[Entity]:
+        # FIXES_NEW.md F.2: only fire on ground-truth usernames.
+        if entity.entity_type != EntityType.USERNAME:
+            record_audit_event(
+                "module_skipped",
+                outcome="skipped",
+                provider="maigret",
+                entity_type=entity.entity_type.value,
+                entity_value=entity.value,
+                reason="wrong_entity_type",
+                message="Maigret only accepts USERNAME entities",
+            )
+            return []
+        if not getattr(entity, "is_ground_truth", False):
+            record_audit_event(
+                "module_skipped",
+                outcome="skipped",
+                provider="maigret",
+                entity_type=entity.entity_type.value,
+                entity_value=entity.value,
+                reason="candidate_username_not_corroborated",
+                message="Maigret refuses to run on non-ground-truth handles",
+            )
+            return []
+
         results: List[Entity] = []
-        target = entity.value.split("@", 1)[0] if entity.entity_type == EntityType.EMAIL else entity.value
+        target = entity.value
         tmpdir = tempfile.mkdtemp(prefix=f"maigret_{scan_id}_")
 
         try:

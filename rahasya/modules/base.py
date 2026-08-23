@@ -14,6 +14,7 @@ from abc import ABC, abstractmethod
 from typing import ClassVar, List, Optional
 
 from rahasya.core.models import Entity, EntityType, SourceReliability
+from rahasya.core.budget import try_charge as _budget_try_charge, calls_used as _budget_calls_used
 from rahasya.config import Settings, settings
 from rahasya.utils.logging import get_logger
 from rahasya.utils.http_client import StealthHTTPClient, TorHTTPClient
@@ -175,6 +176,18 @@ class BaseModule(ABC):
                     entity_type=entity_type_value,
                     entity_value=entity_value,
                     message="Module prerequisites are not available",
+                )
+                return []
+            # FIXES_NEW.md §J.2 — hard network-call budget per scan.
+            if not _budget_try_charge(scan_id):
+                record_audit_event(
+                    "module_skipped",
+                    outcome="skipped",
+                    entity_type=entity_type_value,
+                    entity_value=entity_value,
+                    reason="network_budget_exhausted",
+                    message="Scan-level network-call budget exhausted",
+                    calls_used=_budget_calls_used(scan_id),
                 )
                 return []
 
