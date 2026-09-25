@@ -98,6 +98,7 @@ def _request_from_data(request_data: Dict[str, Any]) -> ScanRequest:
         age_range=request_data.get("age_range") or None,
         max_depth=int(request_data.get("max_depth") or settings.scan.max_depth),
         max_entities=int(request_data.get("max_entities") or settings.scan.max_entities),
+        agentic=request_data.get("agentic"),
     )
 
 

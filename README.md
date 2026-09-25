@@ -4,6 +4,15 @@
 Rahasya is a recursive OSINT platform that accepts minimal input and discovers a maximum digital footprint. It automates intelligence gathering across social media, breach databases, and the dark web to build a comprehensive entity profile.
 
 ## Architecture
+
+Local AI mode uses Ollama and Qwen3 4B with no model API charges. A coordinator
+delegates tool selection to specialists, a reviewer assesses observations, and a
+reporter creates a cited summary. Enable **Use local AI agents** in New Scan or
+pass `--agentic` to the CLI. Decisions and results survive dashboard refreshes.
+Run `python -m rahasya brain-check --probe` to verify local inference. See
+[agent setup and current implementation status](AGENT_SETUP.md) for PC startup,
+limits, and the pending PostgreSQL integration.
+
 ```mermaid
 graph TD
     A[Input Layer] --> B[Orchestrator]

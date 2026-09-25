@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from pydantic import AliasChoices, BaseModel, Field, ConfigDict
 from pydantic import model_validator
+from rahasya.brain.contracts import BrainState
 
 
 class EntityType(str, Enum):
@@ -274,6 +275,7 @@ class ScanRequest(BaseModel):
     location: Optional[str] = None
     max_depth: int = 3
     max_entities: int = 500
+    agentic: Optional[bool] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -338,6 +340,7 @@ class ScanResult(BaseModel):
     stats: ScanStats = Field(default_factory=ScanStats)
     request: Optional[ScanRequest] = None
     error: Optional[str] = None
+    brain: Optional[BrainState] = None
 
     @model_validator(mode="before")
     @classmethod

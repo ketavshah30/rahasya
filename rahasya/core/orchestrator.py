@@ -48,6 +48,8 @@ from rahasya.utils.validators import (
 from rahasya.storage.scan_store import ScanStore
 from rahasya.metrics import ACTIVE_SCANS, SCANS_COMPLETED, SCANS_STARTED
 from rahasya.storage.network_audit import record_audit_event
+from rahasya.brain.contracts import BrainState
+from rahasya.brain.runtime import AgentRuntime, BrainLimit
 
 
 class Orchestrator:
@@ -105,6 +107,8 @@ class Orchestrator:
             "status": ScanStatus.RUNNING,
             "depth_reached": 0,
             "modules_run": 0,
+            "brain": BrainState(models=self.config.brain.models.model_dump())
+            if (request.agentic if request.agentic is not None else self.config.brain.enabled) else None,
         }
 
         # FIXES_NEW.md §J.2 — arm the network-call budget for this scan.
@@ -160,6 +164,7 @@ class Orchestrator:
             initial_entities: Seed entities to start processing.
         """
         state = self._scan_state[scan_id]
+        runtime = None
 
         try:
             # Process in BFS order by depth.
@@ -175,6 +180,13 @@ class Orchestrator:
             max_depth = self.config.scan.max_depth
             max_entities = self.config.scan.max_entities
             max_time = self.config.scan.max_time_minutes * 60  # seconds
+            deadline = state["start_time"] + max_time
+            if state["brain"] is not None:
+                runtime = AgentRuntime(
+                    self.config, scan_id, state["brain"],
+                    lambda: self._persist_state(scan_id, depth=state["depth_reached"], module="Local AI"),
+                )
+                await runtime.start(deadline)
 
             # Seed ground-truth baseline for §J.1.
             state["ground_truth_facts"] = sum(
@@ -231,6 +243,8 @@ class Orchestrator:
                 self._persist_state(scan_id, depth=current_depth, module=None)
 
                 for entity in queue:
+                    if runtime and entity.metadata.get("agent_review", "supported") != "supported":
+                        continue
                     # Recheck limits
                     if state["entity_count"] >= max_entities:
                         break
@@ -241,6 +255,10 @@ class Orchestrator:
                     # Get applicable modules for this entity type
                     modules = self.module_registry.get_modules_for(entity.entity_type)
                     if not modules:
+                        continue
+
+                    if runtime:
+                        await self._run_agent_entity(runtime, scan_id, entity, modules, next_queue, current_depth, deadline)
                         continue
 
                     self.logger.debug(
@@ -396,6 +414,10 @@ class Orchestrator:
             # = no further expansion) and are deferred to a future pass.
             self._select_and_record_related_persons(scan_id)
 
+            if runtime:
+                runtime.state.stop_reason = state["converged_by"]
+                await runtime.report(state["entities"], deadline)
+
             state["status"] = ScanStatus.COMPLETED
             state["completed_at"] = datetime.now(timezone.utc)
             self.logger.info(
@@ -405,6 +427,13 @@ class Orchestrator:
                 f"depth {state['depth_reached']}"
             )
 
+        except BrainLimit as exc:
+            state["converged_by"] = str(exc)
+            state["status"] = ScanStatus.COMPLETED
+            state["completed_at"] = datetime.now(timezone.utc)
+            if runtime:
+                runtime.state.stop_reason = str(exc)
+                runtime.event("limit", outcome="stopped", reason=str(exc))
         except asyncio.CancelledError:
             state["status"] = ScanStatus.CANCELLED
             state["completed_at"] = datetime.now(timezone.utc)
@@ -414,6 +443,9 @@ class Orchestrator:
             state["status"] = ScanStatus.FAILED
             state["completed_at"] = datetime.now(timezone.utc)
             state["error"] = f"{type(e).__name__}: {e}"
+            if runtime:
+                runtime.state.stop_reason = "failed"
+                runtime.event("error", outcome="failed", reason=state["error"][:400])
             self._audit(
                 scan_id,
                 "scan_failed",
@@ -424,6 +456,11 @@ class Orchestrator:
             )
             self.logger.error(f"Scan {scan_id[:8]} failed: {e}", exc_info=True)
         finally:
+            if runtime:
+                state["modules_run"] = runtime.state.actions
+                if state["status"] == ScanStatus.CANCELLED:
+                    runtime.state.stop_reason = "cancelled"
+                await runtime.close()
             self._persist_state(scan_id, depth=state["depth_reached"], module=None)
             await asyncio.gather(
                 *(module.teardown() for module in self.module_registry._instances.values()),
@@ -457,6 +494,45 @@ class Orchestrator:
             _budget_clear_scan(scan_id)
             await self.event_bus.close()
 
+    async def _run_agent_entity(self, runtime, scan_id, entity, modules, next_queue, depth, deadline):
+        state = self._scan_state[scan_id]
+        discovered = []
+        try:
+            async for results in runtime.discover(entity, modules, state["entities"], deadline):
+                state["modules_run"] = runtime.state.actions
+                for child in results:
+                    child.depth = depth + 1
+                    child.parent_entity_id = entity.id
+                    if await self._register_entity(scan_id, child):
+                        discovered.append(child)
+                        rel = Relationship(
+                            source_id=entity.id, target_id=child.id,
+                            relationship_type=self._infer_relationship_type(entity, child),
+                            confidence=child.confidence, source_module=child.source_module,
+                            metadata={"observation_link": True},
+                        )
+                        state["relationships"].append(rel)
+                        await self.graph.add_edge(entity.id, child.id, rel)
+                self._persist_state(scan_id, depth=depth, module="Local AI")
+                if state["entity_count"] >= self.config.scan.max_entities:
+                    raise BrainLimit("entity_limit")
+        finally:
+            # Provider observations survive a reviewer timeout or invalid output.
+            self._persist_state(scan_id, depth=depth, module=None)
+        supported = [e for e in discovered if e.metadata.get("agent_review") == "supported"]
+        for child in supported:
+            if child.confidence >= self.config.scan.confidence_threshold:
+                next_queue.append(child)
+        if supported:
+            for rel in await self.resolver.resolve(supported + [entity]):
+                state["relationships"].append(rel)
+                await self.graph.add_edge(rel.source_id, rel.target_id, rel)
+        self._persist_state(scan_id, depth=depth, module=None)
+        await self.event_bus.publish(Event(
+            type=EventType.SCAN_PROGRESS,
+            payload={"scan_id": scan_id, "entity_count": state["entity_count"], "depth": depth},
+        ))
+
     async def _register_entity(self, scan_id: str, entity: Entity) -> bool:
         """Register a new entity if not already visited.
 
@@ -471,6 +547,8 @@ class Orchestrator:
         key = (entity.entity_type.value, entity.normalized_value)
 
         if key in state["visited"]:
+            return False
+        if state["entity_count"] >= self.config.scan.max_entities:
             return False
 
         state["visited"].add(key)
@@ -836,6 +914,7 @@ class Orchestrator:
             ),
             request=state["request"],
             error=state["error"],
+            brain=state.get("brain"),
         )
 
     def _persist_state(self, scan_id: str, *, depth: int, module: Optional[str]) -> None:

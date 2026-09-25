@@ -1,0 +1,10 @@
+# Optional NVIDIA GPU access for Docker Desktop with WSL2 / configured Linux hosts.
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

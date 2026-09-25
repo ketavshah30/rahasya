@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from rahasya.brain.settings import BrainSettings
 
 
 class DatabaseSettings(BaseModel):
@@ -234,6 +235,7 @@ class Settings(BaseSettings):
     http: HTTPSettings = HTTPSettings()
     storage: StorageSettings = StorageSettings()
     intelx: IntelXSettings = IntelXSettings()
+    brain: BrainSettings = Field(default_factory=BrainSettings)
 
     @model_validator(mode="after")
     def apply_legacy_intelx_tier(self):

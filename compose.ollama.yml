@@ -1,0 +1,36 @@
+# Use with docker-compose.yml. The model API stays on the private Compose network.
+services:
+  ollama:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_NO_CLOUD: "1"
+      OLLAMA_CONTEXT_LENGTH: "4096"
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  web:
+    environment:
+      BRAIN__BASE_URL: http://ollama:11434
+      BRAIN__ENABLED: "true"
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  worker:
+    command: celery -A rahasya.celery_app:app worker --loglevel=INFO --concurrency=1
+    environment:
+      BRAIN__BASE_URL: http://ollama:11434
+      BRAIN__ENABLED: "true"
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+volumes:
+  ollama-models:

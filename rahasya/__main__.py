@@ -60,8 +60,9 @@ def cli() -> None:
 @click.option("--age-range", default=None, help="Age range (e.g., 20-30)")
 @click.option("--max-depth", default=None, type=int, help="Override max recursion depth")
 @click.option("--max-entities", default=None, type=int, help="Override max entity count")
+@click.option("--agentic/--no-agentic", default=None, help="Use local Ollama agents to select discovery tools")
 def scan(name, email, phone, username, photo, location, dob, age_range,
-         max_depth, max_entities) -> None:
+         max_depth, max_entities, agentic) -> None:
     """Run an OSINT scan against a target.
 
     At least one identifier (name, email, phone, or username) is required.
@@ -117,6 +118,7 @@ def scan(name, email, phone, username, photo, location, dob, age_range,
         dob=dob,
         age_range=age_range,
         location=location,
+        agentic=agentic,
     )
 
     async def _run_scan():
@@ -268,6 +270,56 @@ def init_db() -> None:
         console.print(f"[bold red]Error:[/bold red] {e}")
         console.print("[dim]Make sure PostgreSQL is running and DB__URL is set in .env[/dim]")
         sys.exit(1)
+
+
+@cli.command("brain-info")
+def brain_info() -> None:
+    """Show local agent assignments offline; no model or module calls."""
+    from rahasya.brain.agents import describe_agents
+    from rahasya.config import settings
+
+    console.print(f"Local agent mode enabled by default: {settings.brain.enabled}")
+    console.print(f"Provider: {settings.brain.provider}")
+    console.print("Model availability and server connectivity have not been checked.")
+    table = Table(title="Local agent configuration")
+    table.add_column("Role")
+    table.add_column("Model")
+    table.add_column("Allowed modules")
+    for agent in describe_agents(settings.brain):
+        table.add_row(agent["role"], agent["model"], ", ".join(agent["planned_modules"]) or "Investigation state")
+    console.print(table)
+    console.print("Current scan persistence: local JSON ScanStore. PostgreSQL integration is pending.")
+
+
+@cli.command("brain-check")
+@click.option("--probe", is_flag=True, help="Also test structured inference with a synthetic prompt")
+def brain_check(probe) -> None:
+    """Check local Ollama and downloaded models without running discovery tools."""
+    from rahasya.brain.contracts import ToolChoice
+    from rahasya.brain.ollama import BrainError, OllamaClient
+    from rahasya.brain.settings import AgentRole
+    from rahasya.config import settings
+
+    async def check():
+        client = OllamaClient(settings.brain)
+        try:
+            models = await asyncio.wait_for(client.check(), timeout=10)
+            console.print("Available local models: " + ", ".join(models), markup=False)
+            if probe:
+                decision = await client.decide(
+                    AgentRole.COORDINATOR, "No tools are available. Return module null and a short reason.",
+                    {"available": []}, ToolChoice,
+                )
+                if decision.module is not None:
+                    raise BrainError("Model probe selected a tool when none was available.")
+                console.print("Structured inference passed. No discovery tools were run.")
+        finally:
+            await client.close()
+
+    try:
+        asyncio.run(check())
+    except (BrainError, asyncio.TimeoutError) as exc:
+        raise click.ClickException(str(exc) or "Ollama availability check timed out.") from None
 
 
 if __name__ == "__main__":

@@ -74,7 +74,8 @@ class ScanStore:
     def delete(self, scan_id: str) -> bool:
         deleted = False
         network_path = self.root / f"{self._safe_id(scan_id)}.network.jsonl"
-        for path in (self._result_path(scan_id), self._status_path(scan_id), network_path):
+        evidence_path = self.root / f"{self._safe_id(scan_id)}.evidence.jsonl"
+        for path in (self._result_path(scan_id), self._status_path(scan_id), network_path, evidence_path):
             if path.exists():
                 path.unlink()
                 deleted = True

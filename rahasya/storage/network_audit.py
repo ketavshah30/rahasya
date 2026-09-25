@@ -22,6 +22,18 @@ from rahasya.config import settings
 _scan_id: ContextVar[Optional[str]] = ContextVar("rahasya_audit_scan_id", default=None)
 _source_module: ContextVar[str] = ContextVar("rahasya_audit_source_module", default="system")
 _audit_root: ContextVar[Optional[str]] = ContextVar("rahasya_audit_root", default=None)
+_outcome_observer: ContextVar[Optional[dict]] = ContextVar("rahasya_module_outcome", default=None)
+
+
+@contextmanager
+def capture_module_outcome():
+    """Observe surfaced module failures without changing the legacy list API."""
+    observed = {"failed": False, "skipped": False}
+    token = _outcome_observer.set(observed)
+    try:
+        yield observed
+    finally:
+        _outcome_observer.reset(token)
 _write_lock = threading.RLock()
 
 SECRET_QUERY_KEYS = {
@@ -154,6 +166,12 @@ def record_audit_event(
 ) -> Optional[Dict[str, Any]]:
     """Record an event using explicit values or the active module audit scope."""
     resolved_scan_id = scan_id or _scan_id.get()
+    observed = _outcome_observer.get()
+    if observed is not None:
+        if outcome in {"failed", "error", "http_error", "rate_limited", "timeout", "degraded"}:
+            observed["failed"] = True
+        if event_type == "module_skipped":
+            observed["skipped"] = True
     if not resolved_scan_id:
         return None
     resolved_root = root or _audit_root.get() or settings.storage.scan_dir

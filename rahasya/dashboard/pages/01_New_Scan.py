@@ -1,5 +1,6 @@
 import os
 import streamlit as st
+from rahasya.config import settings
 
 from rahasya.dashboard.state import (
     SCAN_STORE,
@@ -26,6 +27,10 @@ st.markdown("<h1 class='neon-text'>INITIATE NEW SCAN</h1>", unsafe_allow_html=Tr
 st.markdown("Enter target identifiers. The investigation continues in the background across page changes and refreshes.")
 
 with st.form("new_scan_form"):
+    agentic = st.checkbox(
+        "Use local AI agents", value=settings.brain.enabled,
+        help="Requires Ollama and downloaded models. Agents select tools and assess observations locally.",
+    )
     col1, col2 = st.columns(2)
 
     with col1:
@@ -72,6 +77,7 @@ if submit_button:
             "max_entities": max_entities,
             "timeout": timeout,
             "confidence_threshold": confidence_threshold,
+            "agentic": agentic,
             "modules": {
                 "social": mod_social,
                 "breach": mod_breach,
