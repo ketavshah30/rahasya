@@ -12,6 +12,10 @@ from rahasya.storage.network_audit import (
 from rahasya.utils.http_client import StealthHTTPClient
 
 
+async def _no_sleep(*_args, **_kwargs):
+    return None
+
+
 def test_redact_url_removes_credentials_and_secret_queries():
     redacted = redact_url(
         "https://alice:password@example.com/search?q=public&api_key=secret&token=hidden"
@@ -61,7 +65,7 @@ async def test_http_client_records_success_and_redacts_secret_query(tmp_path, mo
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, request=request, json={"ok": True})
 
-    client = StealthHTTPClient(max_retries=1)
+    client = StealthHTTPClient(max_retries=1, use_impersonation=False)
     await client._client.aclose()
     client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     try:
@@ -80,24 +84,70 @@ async def test_http_client_records_success_and_redacts_secret_query(tmp_path, mo
 
 
 @pytest.mark.asyncio
-async def test_http_client_records_http_error_without_retry(tmp_path, monkeypatch):
+async def test_http_client_classifies_404_as_expected_negative_without_retry(tmp_path, monkeypatch):
+    # New semantics: a 404 is an *expected negative* (resource genuinely absent), not a transport
+    # failure. The client returns the response instead of raising, records outcome
+    # "expected_negative", and does NOT retry (404 is terminal, not a block).
     monkeypatch.setattr("rahasya.utils.http_client.random.uniform", lambda _a, _b: 0)
 
+    calls = 0
+
     async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
         return httpx.Response(404, request=request, text="missing")
 
-    client = StealthHTTPClient(max_retries=3)
+    client = StealthHTTPClient(max_retries=3, use_impersonation=False)
     await client._client.aclose()
     client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     try:
-        with audit_scope("scan-failed", "test-module", tmp_path):
-            with pytest.raises(httpx.HTTPStatusError):
-                await client.get("https://example.com/missing")
+        with audit_scope("scan-negative", "test-module", tmp_path):
+            response = await client.get("https://example.com/missing")
+            assert response.status_code == 404
     finally:
         await client.close()
 
-    events = NetworkAuditStore(tmp_path).load("scan-failed")
+    assert calls == 1  # terminal, not retried
+    events = NetworkAuditStore(tmp_path).load("scan-negative")
     assert len(events) == 1
-    assert events[0]["outcome"] == "http_error"
+    assert events[0]["outcome"] == "expected_negative"
     assert events[0]["status_code"] == 404
     assert events[0]["attempt"] == 1
+
+    # And expected negatives must NOT inflate the failure metric.
+    summary = NetworkAuditStore(tmp_path).summary("scan-negative")
+    assert summary["failed_requests"] == 0
+    assert summary["expected_negative_requests"] == 1
+
+
+@pytest.mark.asyncio
+async def test_http_client_retries_bot_block_then_succeeds(tmp_path, monkeypatch):
+    # A 403 Cloudflare challenge is retried with a rotated fingerprint and succeeds on retry.
+    monkeypatch.setattr("rahasya.utils.http_client.random.uniform", lambda _a, _b: 0)
+    monkeypatch.setattr("rahasya.utils.http_client.asyncio.sleep", _no_sleep)
+
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(
+                403, request=request, text="<html>Just a moment... cf-chl-bypass</html>"
+            )
+        return httpx.Response(200, request=request, json={"ok": True})
+
+    client = StealthHTTPClient(max_retries=3, use_impersonation=False, request_jitter=None)
+    await client._client.aclose()
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        with audit_scope("scan-block", "test-module", tmp_path):
+            response = await client.get("https://example.com/protected")
+            assert response.status_code == 200
+    finally:
+        await client.close()
+
+    assert calls == 2  # blocked once, retried, succeeded
+    events = NetworkAuditStore(tmp_path).load("scan-block")
+    assert events[0]["outcome"] == "http_error"      # first attempt: an un-beaten challenge
+    assert events[-1]["outcome"] == "success"          # retry won

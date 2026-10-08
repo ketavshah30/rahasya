@@ -140,12 +140,23 @@ def summarize_events(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Build dashboard/report totals from an already-loaded event collection."""
     network = [event for event in events if event.get("event_type") == "network_request"]
     modules = [event for event in events if str(event.get("event_type", "")).startswith("module_")]
+    # expected_negative (404/410/private-forbidden) and auth_error (bad/missing API key) are NOT
+    # transport failures — they are either benign data or a configuration issue, so they are
+    # excluded from the failed_requests metric that measures network reliability.
     failure_outcomes = {"failed", "error", "http_error", "rate_limited", "timeout", "cancelled"}
     failed = [event for event in network if event.get("outcome") in failure_outcomes]
+    expected_negative = [event for event in network if event.get("outcome") == "expected_negative"]
+    auth_errors = [event for event in network if event.get("outcome") == "auth_error"]
+    # `unreachable` = host blocks our egress IP / is dead. Not a client defect and not fixable by
+    # fingerprinting, so it is tracked separately and excluded from failed_requests.
+    unreachable = [event for event in network if event.get("outcome") == "unreachable"]
     return {
         "total_events": len(events),
         "network_attempts": len(network),
         "successful_requests": sum(event.get("outcome") == "success" for event in network),
+        "expected_negative_requests": len(expected_negative),
+        "auth_error_requests": len(auth_errors),
+        "unreachable_requests": len(unreachable),
         "failed_requests": len(failed),
         "unique_hosts": len({event.get("host") for event in network if event.get("host")}),
         "module_events": len(modules),

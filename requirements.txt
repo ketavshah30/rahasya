@@ -6,7 +6,9 @@ pydantic>=2.0
 pydantic-settings>=2.0
 loguru>=0.7
 python-dotenv>=1.0
-httpx>=0.27
+# httpx[http2] pulls in h2 so the fallback transport can negotiate HTTP/2 (a real browser does).
+httpx[http2]>=0.27
+h2>=4.0
 aiohttp>=3.9
 
 # OSINT Tools
@@ -50,9 +52,12 @@ redis>=5.0
 flower>=2.0
 prometheus-client>=0.20
 
-# Anti-detection
-playwright>=1.40
-curl-cffi>=0.6
+# Anti-detection — network-layer fingerprinting (no browser engine).
+# curl-cffi provides genuine browser TLS/JA3 + HTTP/2 impersonation; it is the PRIMARY transport
+# and the main defence against 403 bot-protection. Required, not optional.
+curl-cffi>=0.7
+# Playwright is intentionally NOT required: Rahasya does anti-bot evasion at the TLS/HTTP layer,
+# not via a headless browser. PlaywrightClient remains only as a deprecated no-op shim.
 
 # Reporting
 Jinja2>=3.1

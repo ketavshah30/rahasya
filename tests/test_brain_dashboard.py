@@ -3,6 +3,12 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
+# Streamlit is an optional heavy dashboard dependency. Skip (don't crash collection) when the
+# dashboard extra is not installed in this environment.
+pytest.importorskip("streamlit", reason="streamlit dashboard extra not installed")
+
 from streamlit.testing.v1 import AppTest
 
 from rahasya.brain.contracts import AgentEvent, AgentReport, BrainState, EvidenceBatch, ReportClaim

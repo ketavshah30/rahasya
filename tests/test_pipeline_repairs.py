@@ -18,6 +18,10 @@ from rahasya.modules.social.whatsmyname_module import WhatsMyNameModule
 from rahasya.utils.http_client import StealthHTTPClient
 
 
+async def _no_sleep(*_args, **_kwargs):
+    return None
+
+
 def entity(entity_type=EntityType.USERNAME, value="known-user", is_ground_truth=True):
     # FIXES_NEW.md §F: enumerators now require is_ground_truth=True.
     # Existing tests were written before D.3 landed; defaulting to True
@@ -210,7 +214,11 @@ async def test_ahmia_disables_itself_after_repeated_degraded_responses():
 
 
 @pytest.mark.asyncio
-async def test_connect_error_is_terminal_and_jitter_can_be_disabled():
+async def test_connect_error_is_retried_then_raised(monkeypatch):
+    # New semantics: a transient connect/DNS error is no longer terminal on the first blip — it is
+    # retried up to max_retries with backoff (one lost packet should not kill a host). After all
+    # attempts are exhausted the original error is raised to the caller.
+    monkeypatch.setattr("rahasya.utils.http_client.asyncio.sleep", _no_sleep)
     calls = 0
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -219,8 +227,10 @@ async def test_connect_error_is_terminal_and_jitter_can_be_disabled():
         raise httpx.ConnectError("unreachable", request=request)
 
     client = StealthHTTPClient(
-        max_retries=3,
+        max_retries=5,
         request_jitter=None,
+        use_impersonation=False,
+        connect_error_retry_cap=2,
     )
     await client._client.aclose()
     client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -229,7 +239,9 @@ async def test_connect_error_is_terminal_and_jitter_can_be_disabled():
             await client.get("https://unreachable.example")
     finally:
         await client.close()
-    assert calls == 1
+    # Connect errors fail fast at connect_error_retry_cap (2), NOT the full max_retries (5):
+    # a dead/IP-blocked host must not consume the whole retry budget and stall a scan.
+    assert calls == 2
 
 
 @pytest.mark.asyncio
