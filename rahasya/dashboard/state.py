@@ -255,6 +255,8 @@ def render_scan_detail_bar(st, key: str) -> Optional[ScanResult]:
     progress = SCAN_STORE.load_status(options[label]) or {}
     middle.metric("Status", progress.get("status", result.status.value if result else "N/A"))
     right.metric("Entities", progress.get("entity_count", result.stats.total_entities if result else 0))
+    from rahasya.dashboard.ui import demo_notice
+    demo_notice(result)
     return result
 
 
@@ -495,11 +497,12 @@ def build_html_report(result: ScanResult) -> str:
         f"<td>{entity.confidence:.2f}</td></tr>"
         for entity in result.entities
     )
+    demo_label = "<p><strong>SYNTHETIC DEMO: fictional records and prepared assessments. No live search or model inference.</strong></p>" if result.scan_id.startswith("demo-") else ""
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>Rahasya Report {html.escape(result.scan_id)}</title><style>
-body{{font-family:monospace;background:#07110d;color:#d8ffe9}}table{{border-collapse:collapse;width:100%}}
-th,td{{border:1px solid #1b9b61;padding:8px;text-align:left}}th{{background:#0b2017}}</style></head>
-<body><h1>Rahasya Investigation Report</h1><p><strong>Scan ID:</strong> {html.escape(result.scan_id)}</p>
+body{{font-family:Arial,sans-serif;background:#0b111b;color:#e9eef5;padding:40px;max-width:1200px;margin:auto}}table{{border-collapse:collapse;width:100%}}
+th,td{{border:1px solid #34485b;padding:8px;text-align:left}}th{{background:#19372f}}</style></head>
+<body><h1>Rahasya · Exposure Assessment</h1>{demo_label}<p><strong>Scan ID:</strong> {html.escape(result.scan_id)}</p>
 <p><strong>Status:</strong> {result.status.value}</p><p><strong>Entities:</strong> {result.stats.total_entities}</p>
 <p><strong>Relationships:</strong> {result.stats.total_relationships}</p><p><strong>Risk Score:</strong> {risk['overall_score']}/100</p>
 <h2>Entities</h2><table><thead><tr><th>Type</th><th>Value</th><th>Source</th><th>Confidence</th></tr></thead>

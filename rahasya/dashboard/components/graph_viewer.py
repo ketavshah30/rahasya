@@ -1,9 +1,10 @@
-"""Interactive CIA correlation-web renderer."""
+"""Interactive evidence relationship map."""
 
 from __future__ import annotations
 
 import html
 import json
+import re
 from typing import Iterable, Optional
 
 from pyvis.network import Network
@@ -13,7 +14,7 @@ from rahasya.core.models import EntityType
 
 COLOR_MAP = {
     EntityType.PERSON.value: "#b777ff",
-    EntityType.EMAIL.value: "#00e5ff",
+    EntityType.EMAIL.value: "#79bce8",
     EntityType.PHONE.value: "#41ff96",
     EntityType.USERNAME.value: "#ffd166",
     EntityType.SOCIAL_PROFILE.value: "#ff5ca8",
@@ -25,7 +26,7 @@ COLOR_MAP = {
     EntityType.COMPANY.value: "#ff9f43",
     EntityType.TIMELINE_EVENT.value: "#b6ff00",
 }
-CLUSTER_COLORS = ["#00ff88", "#00e5ff", "#ffca3a", "#ff5ca8", "#a78bfa", "#fb7185"]
+CLUSTER_COLORS = ["#7de2c3", "#79bce8", "#ffca3a", "#ff5ca8", "#a78bfa", "#fb7185"]
 
 
 def build_pyvis_graph(
@@ -41,7 +42,7 @@ def build_pyvis_graph(
     path = list(highlight_path or [])
     path_nodes = set(path)
     path_edges = {tuple(sorted((path[i], path[i + 1]))) for i in range(max(0, len(path) - 1))}
-    net = Network(height="760px", width="100%", bgcolor="#06100c", font_color="#d8ffe9", directed=True)
+    net = Network(height="660px", width="100%", bgcolor="#101a28", font_color="#dce7f4", directed=True, cdn_resources="in_line")
 
     if physics == "Hierarchical (by depth)":
         net.set_options(json.dumps({
@@ -68,7 +69,7 @@ def build_pyvis_graph(
                 f"{relationship.relationship_type.value} ← {source.value} ({relationship.confidence:.0%}, {relationship.source_module})"
             )
     for entity in entities:
-        base_color = COLOR_MAP.get(entity.entity_type.value, "#d8ffe9")
+        base_color = COLOR_MAP.get(entity.entity_type.value, "#dce7f4")
         cluster = clusters.get(entity.id)
         border = CLUSTER_COLORS[cluster_indexes.get(cluster, 0) % len(CLUSTER_COLORS)] if cluster else base_color
         metadata = html.escape(json.dumps(entity.metadata or {}, indent=2, default=str))
@@ -92,6 +93,7 @@ def build_pyvis_graph(
             size=24 if entity.id in path_nodes else (19 if entity.entity_type == EntityType.PERSON else 14),
             level=entity.depth,
             shape="dot",
+            font={"size": 16, "face": "Segoe UI", "color": "#dce7f4", "strokeWidth": 0},
         )
 
     for rel in relationships:
@@ -99,28 +101,34 @@ def build_pyvis_graph(
         net.add_edge(
             rel.source_id,
             rel.target_id,
-            label=rel.relationship_type.value,
+            label=rel.relationship_type.value.replace("_", " ").title(),
+            font={"size": 11, "color": "#b6c7d9", "strokeWidth": 0, "align": "middle"},
+            dashes=rel.confidence < 0.6,
             title=f"{rel.relationship_type.value} · {rel.confidence:.0%} · {rel.source_module}",
-            value=max(1, rel.confidence * 4),
-            color="#f4ff2b" if on_path else "rgba(110, 255, 180, 0.45)",
-            width=5 if on_path else 1,
+            color="#f4ff2b" if on_path else "rgba(125, 190, 185, 0.4)",
+            width=3 if on_path else 1.5,
             arrows="to",
         )
 
     generated = net.generate_html()
+    # Pyvis includes optional Bootstrap CDN assets; the graph itself is inlined.
+    generated = re.sub(r'<link[^>]*href="https?://[^"]*"[^>]*>', "", generated)
+    generated = re.sub(r'<script[^>]*src="https?://[^"]*"[^>]*>\s*</script>', "", generated)
     panel = """
     <style>
       #intel-panel{position:absolute;right:12px;top:12px;width:300px;max-height:700px;overflow:auto;
-      background:rgba(3,14,9,.94);border:1px solid #00ff88;color:#d8ffe9;padding:14px;z-index:99;
-      font:12px Consolas,monospace;box-shadow:0 0 18px rgba(0,255,136,.18)}
-      #intel-panel pre{white-space:pre-wrap;font-size:10px;color:#9ddfb9} #intel-panel h3{color:#00ff88;margin-top:0}
+      background:rgba(16,26,40,.97);border:1px solid #344a61;border-radius:12px;color:#dce7f4;padding:14px;z-index:99;
+      font:12px Segoe UI,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.15)}
+      #intel-panel pre{white-space:pre-wrap;font-size:10px;color:#a5bbcf} #intel-panel h3{color:#7de2c3;margin-top:0}
+      @media(max-width:650px){#intel-panel{position:relative;right:auto;top:auto;width:auto;max-height:220px}}
+      body{margin:0;background:#101a28} .card{border:0!important} #mynetwork{border:0!important;border-radius:12px}
     </style>
-    <div id="intel-panel"><h3>NODE INTELLIGENCE</h3><span>Click a node to inspect sources, confidence, cluster, and metadata.</span></div>
+    <div id="intel-panel"><h3>EVIDENCE DETAILS</h3><span>Click a node to inspect sources, confidence, cluster, and metadata.</span></div>
     <script>
       network.on("click", function(params) {
         if (!params.nodes.length) return;
         const node = nodes.get(params.nodes[0]);
-        document.getElementById("intel-panel").innerHTML = "<h3>NODE INTELLIGENCE</h3>" + node.details;
+        document.getElementById("intel-panel").innerHTML = "<h3>EVIDENCE DETAILS</h3>" + node.details;
       });
     </script>
     """

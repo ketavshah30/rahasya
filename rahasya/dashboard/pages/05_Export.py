@@ -1,6 +1,6 @@
-import os
 
 import streamlit as st
+from rahasya.dashboard.ui import page_header
 
 from rahasya.dashboard.state import (
     build_html_report,
@@ -15,36 +15,14 @@ from rahasya.dashboard.state import (
 from rahasya.storage.network_audit import NetworkAuditStore, audit_html_report
 
 
-def load_css():
-    css_path = os.path.join(os.path.dirname(__file__), "..", "static", "style.css")
-    if os.path.exists(css_path):
-        with open(css_path, "r", encoding="utf-8") as f:
-            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
+page_header('Export & share', 'Take your selected assessment, source trail, and evidence with you.')
 
 
-load_css()
-
-st.markdown("<h1 class='neon-text'>DATA EXPORT</h1>", unsafe_allow_html=True)
-st.markdown("Export real scan results and intelligence reports.")
-
-render_scan_detail_bar(st, "export")
-
-options = get_result_options(st)
-if not options:
-    st.info("No scan results available. Run a scan from New Scan first.")
+result = render_scan_detail_bar(st, "export")
+if result is None:
+    st.info("Start an assessment or load the synthetic case in Demo studio to export a report.")
 else:
-    labels = list(options.keys())
-    default_label = labels[0]
-    if st.session_state.current_scan_id:
-        for label, scan_id in options.items():
-            if scan_id == st.session_state.current_scan_id:
-                default_label = label
-                break
-
-    selected_label = st.selectbox("Available Scans", labels, index=labels.index(default_label))
-    selected_scan_id = options[selected_label]
-    result = SCAN_STORE.load(selected_scan_id)
-
     st.markdown("### Export Formats")
 
     col1, col2, col3, col4 = st.columns(4)
@@ -96,7 +74,7 @@ else:
         )
 
     with col4:
-        audit_events = NetworkAuditStore().load(result.scan_id)
+        audit_events = NetworkAuditStore(SCAN_STORE.root).load(result.scan_id)
         st.markdown("""
         <div class="glass-card" style="text-align: center;">
             <h3 style="color: var(--primary-cyan)">Network Audit</h3>

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import os
 
 import pandas as pd
 import streamlit as st
+from rahasya.dashboard.ui import page_header
 
-from rahasya.config import settings
+from rahasya.dashboard import state
 from rahasya.dashboard.state import autorefresh_running, render_scan_detail_bar
 from rahasya.storage.network_audit import (
     NetworkAuditStore,
@@ -25,13 +25,6 @@ DISPLAY_COLUMNS = [
 ]
 
 
-def load_css() -> None:
-    css_path = os.path.join(os.path.dirname(__file__), "..", "static", "style.css")
-    if os.path.exists(css_path):
-        with open(css_path, "r", encoding="utf-8") as stream:
-            st.markdown(f"<style>{stream.read()}</style>", unsafe_allow_html=True)
-
-
 def dataframe(events: list[dict]) -> pd.DataFrame:
     frame = pd.DataFrame(events)
     for column in DISPLAY_COLUMNS:
@@ -39,9 +32,7 @@ def dataframe(events: list[dict]) -> pd.DataFrame:
             frame[column] = None
     return frame
 
-
-load_css()
-st.markdown("<h1 class='neon-text'>NETWORK & SOURCE LOG</h1>", unsafe_allow_html=True)
+page_header('Source log', 'Inspect source attempts, provider outcomes, and failures recorded for this assessment.')
 st.markdown(
     "Every source attempt, provider check, module state, HTTP response, timeout, and parse error "
     "recorded for the selected scan. API credentials in URL query strings are redacted."
@@ -51,7 +42,7 @@ result = render_scan_detail_bar(st, "network_log")
 autorefresh_running(st, result, "network_log")
 
 if result is not None:
-    store = NetworkAuditStore(settings.storage.scan_dir)
+    store = NetworkAuditStore(state.SCAN_STORE.root)
     events = store.load(result.scan_id)
     summary = summarize_events(events)
     provider_checks = [event for event in events if event.get("event_type") == "provider_site_check"]

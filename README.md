@@ -47,7 +47,7 @@ graph TD
 | Component | Technology | Purpose |
 | --- | --- | --- |
 | Core | Python 3.10+ | Primary logic and module execution |
-| Web Dashboard | Streamlit | CIA-terminal themed user interface |
+| Web Dashboard | Streamlit | Evidence-focused research dashboard with an offline demo |
 | Database | PostgreSQL | Persistent storage of entities and relationships |
 | Task Queue | Celery + Redis | Asynchronous and distributed task execution |
 | Graph DB | Neo4j (Optional) | Advanced relationship querying |
@@ -141,11 +141,33 @@ Sherlock / Maigret / WhatsMyName **only** run on ground-truth `USERNAME` entitie
 | Multimedia (EXIF / ImageHash / LiveProbe) | Photo, Social profile | - | LiveProbe annotates each profile's live-status; used to gate Wayback. |
 
 ## Dashboard
-The Rahasya dashboard features a CIA-terminal themed interface providing actionable insights. Key pages include:
-- **Scan Initialization**: Start targeted scans with minimal input.
-- **Entity Resolution**: View and merge discovered entities.
-- **CIA Web**: Interactive, filterable relationship mapping of digital footprints.
-- **Risk Assessment**: Actionable risk scores based on breach and exposure data.
+The dashboard uses a shared dark theme, grouped navigation, responsive layouts, and a guided synthetic case for academic presentations.
+
+- **Overview**: workspace metrics, an assessment library, and shortcuts through the workflow.
+- **Demo studio**: a fictional identity, presenter guide, eight-role architecture, and an interactive Python evidence-filtering lab.
+- **Evidence explorer**: searchable observations, source references, compact agent cards, and review status.
+- **Relationship map / Timeline**: interactive links and the chronology of stored evidence.
+- **AI agents / Source log**: model activity, filtering counts, provider outcomes, and failures.
+- **Exposure report / Export**: a documented heuristic rubric, recommended actions, and downloadable reports.
+
+From the repository root, with project dependencies installed:
+
+```powershell
+python -m streamlit run rahasya/dashboard/app.py
+```
+
+Open **Explore the demo** on Overview or **Load demo assessment** in Demo studio.
+The fixture uses reserved example domains and fictional records; it makes no external
+searches or model calls. It is labeled synthetic across views and in its HTML report.
+The filtering lab performs real deterministic Python selection on 100–10,000 synthetic
+records, but does not run a model or persist a bulk evidence archive.
+The relationship map embeds its graph scripts so it does not need a CDN.
+
+Loading the demo saves a separate `demo-faculty-v1` assessment in the configured scan
+directory. Existing assessments are preserved and remain selectable. Demonstrating the
+live agent workflow still requires Ollama and configured source access; the prepared
+agent decisions are illustrations, not live model results. The exposure score is a
+heuristic and can include uncertain observations, so attribution requires review.
 
 ## Project Structure
 ```text

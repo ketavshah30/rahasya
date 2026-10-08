@@ -40,3 +40,6 @@ data/reports/
 data/scans/
 data/state/
 *.db
+
+# Local dashboard preview artifacts
+data/ui-preview/

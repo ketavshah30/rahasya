@@ -40,7 +40,7 @@ dependencies = [
     "PySocks>=1.7",
     "requests[socks]>=2.31",
     # Dashboard
-    "streamlit>=1.32",
+    "streamlit>=1.60",
     "streamlit-autorefresh>=1.0.1",
     "pyvis>=0.3",
     "streamlit-agraph>=0.0.45",

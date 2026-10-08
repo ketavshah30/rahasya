@@ -4,14 +4,15 @@ import streamlit as st
 
 from rahasya.dashboard.state import autorefresh_running, get_current_result, render_scan_detail_bar
 
-st.title("Local AI agents")
-result = get_current_result(st)
+from rahasya.dashboard.ui import page_header
+
+page_header("Local AI agents", "Follow the decisions. Understand the tools. Review the evidence.")
+result = render_scan_detail_bar(st, "agents")
 if result is None:
     st.info("Select an investigation or start a scan with local AI agents enabled.")
 elif result.brain is None:
     st.info("This investigation used the standard module workflow.")
 else:
-    render_scan_detail_bar(st, "agents")
     brain = result.brain
     st.caption("Agent assessments are model judgments. Source attribution and confidence come from the discovery modules.")
     left, middle, right = st.columns(3)

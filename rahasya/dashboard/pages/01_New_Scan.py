@@ -1,5 +1,5 @@
-import os
 import streamlit as st
+from rahasya.dashboard.ui import page_header
 from rahasya.config import settings
 
 from rahasya.dashboard.state import (
@@ -13,18 +13,12 @@ from rahasya.dashboard.state import (
 )
 
 
-def load_css():
-    css_path = os.path.join(os.path.dirname(__file__), "..", "static", "style.css")
-    if os.path.exists(css_path):
-        with open(css_path, "r", encoding="utf-8") as f:
-            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-
-
-load_css()
 ensure_dashboard_state(st)
 
-st.markdown("<h1 class='neon-text'>INITIATE NEW SCAN</h1>", unsafe_allow_html=True)
-st.markdown("Enter target identifiers. The investigation continues in the background across page changes and refreshes.")
+page_header('New assessment', 'Begin with an identifier, choose your sources, and define the investigation scope.')
+
+
+st.caption("Use identifiers you own or have permission to assess. For the presentation, Demo studio uses fictional data without external lookups.")
 
 with st.form("new_scan_form"):
     agentic = st.checkbox(
@@ -34,17 +28,17 @@ with st.form("new_scan_form"):
     col1, col2 = st.columns(2)
 
     with col1:
-        name = st.text_input("Full Name", placeholder="e.g. John Doe")
-        email = st.text_input("Email Address", placeholder="e.g. john@example.com")
+        name = st.text_input("Full Name", placeholder="Name within the agreed scope")
+        email = st.text_input("Email Address", placeholder="you@example.org")
         phone = st.text_input("Phone Number", placeholder="e.g. +91 9876543210")
-        username = st.text_input("Username", placeholder="e.g. johndoe99")
+        username = st.text_input("Username", placeholder="Your public handle")
 
     with col2:
         location = st.text_input("Location", placeholder="e.g. Ahmedabad, Gujarat, India")
         age_range = st.text_input("Age Range", placeholder="e.g. 20-25")
-        photo = st.file_uploader("Target Photo", type=["jpg", "png", "jpeg"])
+        photo = st.file_uploader("Reference photo", type=["jpg", "png", "jpeg"])
 
-    with st.expander("Advanced Scan Configuration"):
+    with st.expander("Scope, sources & limits"):
         conf_col1, conf_col2 = st.columns(2)
         with conf_col1:
             max_depth = st.slider("Max Recursion Depth", 1, 5, 1)
@@ -58,7 +52,7 @@ with st.form("new_scan_form"):
             mod_multimedia = st.checkbox("Multimedia Analysis", value=True)
             confidence_threshold = st.slider("Min Confidence Score", 0.0, 1.0, 0.5)
 
-    submit_button = st.form_submit_button("INITIATE SCAN", width="stretch")
+    submit_button = st.form_submit_button("Start assessment", width="stretch", type="primary")
 
 if submit_button:
     if not any([name, email, phone, username, photo, location]):
@@ -89,7 +83,7 @@ if submit_button:
         scan_id = submit_background_scan(request_data)
         st.session_state.current_scan_id = scan_id
         st.success(f"Investigation dispatched. ID: {scan_id}")
-        st.info("You can now open CIA Web, Timeline, Exposure Report, or Export; this scan will keep running.")
+        st.info("Open the Relationship map, Timeline, AI agents, or Exposure report. The assessment continues in the background.")
 
 active = get_current_result(st)
 if active is not None:

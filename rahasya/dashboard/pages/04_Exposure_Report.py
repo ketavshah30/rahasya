@@ -1,25 +1,18 @@
-import os
 
 import plotly.graph_objects as go
 import streamlit as st
+from rahasya.dashboard.ui import page_header
 
 from rahasya.dashboard.state import autorefresh_running, calculate_risk, render_scan_detail_bar
 
 
-def load_css():
-    css_path = os.path.join(os.path.dirname(__file__), "..", "static", "style.css")
-    if os.path.exists(css_path):
-        with open(css_path, "r", encoding="utf-8") as stream:
-            st.markdown(f"<style>{stream.read()}</style>", unsafe_allow_html=True)
+page_header('Exposure report', 'Understand the scoring rubric, inspect the findings, and decide what to address.')
 
-
-load_css()
-st.markdown("<h1 class='neon-text'>EXPOSURE & RISK MODEL</h1>", unsafe_allow_html=True)
-st.markdown("A documented, evidence-weighted assessment—not a raw result count.")
 
 result = render_scan_detail_bar(st, "exposure")
 autorefresh_running(st, result, "exposure")
 if result is not None:
+    st.caption("Heuristic score based on stored observations. It is not a probability of compromise; uncertain associations may contribute. Review attribution before acting.")
     data = calculate_risk(result)
     categories = list(data["categories"])
     scores = [data["categories"][name] for name in categories]
@@ -27,12 +20,12 @@ if result is not None:
     gauge = go.Figure(go.Indicator(
         mode="gauge+number",
         value=data["overall_score"],
-        title={"text": "Weighted exposure score", "font": {"color": "#d8ffe9"}},
+        title={"text": "Weighted exposure score", "font": {"color": "#dce7f4"}},
         gauge={
-            "axis": {"range": [0, 100], "tickcolor": "#d8ffe9"},
-            "bar": {"color": "#00ff88"},
+            "axis": {"range": [0, 100], "tickcolor": "#dce7f4"},
+            "bar": {"color": "#7de2c3"},
             "bgcolor": "rgba(0,0,0,0)",
-            "bordercolor": "#00e5ff",
+            "bordercolor": "#79bce8",
             "steps": [
                 {"range": [0, 33], "color": "rgba(16,185,129,.18)"},
                 {"range": [33, 66], "color": "rgba(245,158,11,.22)"},
@@ -40,19 +33,19 @@ if result is not None:
             ],
         },
     ))
-    gauge.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#d8ffe9", height=350)
+    gauge.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#dce7f4", height=350)
 
     radar = go.Figure(go.Scatterpolar(
         r=scores + scores[:1],
         theta=categories + categories[:1],
         fill="toself",
-        line_color="#00e5ff",
+        line_color="#79bce8",
         fillcolor="rgba(0,229,255,.18)",
     ))
     radar.update_layout(
-        polar={"bgcolor": "rgba(0,0,0,0)", "radialaxis": {"range": [0, 100], "gridcolor": "#214d38"}},
+        polar={"bgcolor": "rgba(0,0,0,0)", "radialaxis": {"range": [0, 100], "gridcolor": "#304257"}},
         paper_bgcolor="rgba(0,0,0,0)",
-        font_color="#d8ffe9",
+        font_color="#dce7f4",
         showlegend=False,
         height=350,
     )
@@ -60,7 +53,7 @@ if result is not None:
     left.plotly_chart(gauge, width="stretch")
     right.plotly_chart(radar, width="stretch")
 
-    st.markdown("### Why this score is high")
+    st.markdown("### What contributes to the score")
     if data["reasons"]:
         for reason in data["reasons"]:
             st.markdown(f"- **{reason['category']} ({reason['score']}/100):** {reason['reason']}")

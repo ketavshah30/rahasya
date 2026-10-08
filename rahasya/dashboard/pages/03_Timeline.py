@@ -1,21 +1,13 @@
-import os
 
 import plotly.express as px
 import streamlit as st
+from rahasya.dashboard.ui import page_header
 
 from rahasya.dashboard.state import autorefresh_running, render_scan_detail_bar, timeline_dataframe
 
 
-def load_css():
-    css_path = os.path.join(os.path.dirname(__file__), "..", "static", "style.css")
-    if os.path.exists(css_path):
-        with open(css_path, "r", encoding="utf-8") as stream:
-            st.markdown(f"<style>{stream.read()}</style>", unsafe_allow_html=True)
+page_header('Evidence timeline', 'Follow profile history, archive snapshots, incidents, and discovery dates.')
 
-
-load_css()
-st.markdown("<h1 class='neon-text'>IDENTITY PRESENCE TIMELINE</h1>", unsafe_allow_html=True)
-st.markdown("Profile creation, archive snapshots, breaches, dark-web sightings, and discovery events.")
 
 result = render_scan_detail_bar(st, "timeline")
 autorefresh_running(st, result, "timeline")
@@ -40,7 +32,7 @@ if result is not None:
         figure.update_layout(
             plot_bgcolor="rgba(0,0,0,0)",
             paper_bgcolor="rgba(0,0,0,0)",
-            font_color="#d8ffe9",
+            font_color="#dce7f4",
             xaxis_title="Observed date (zoom or drag to inspect)",
             margin=dict(l=20, r=20, t=50, b=20),
         )

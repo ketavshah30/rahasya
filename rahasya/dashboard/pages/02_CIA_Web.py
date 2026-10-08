@@ -1,6 +1,6 @@
-import os
 
 import streamlit as st
+from rahasya.dashboard.ui import page_header
 import streamlit.components as components
 
 from rahasya.dashboard.components.graph_viewer import build_pyvis_graph
@@ -12,16 +12,8 @@ from rahasya.dashboard.state import (
 )
 
 
-def load_css():
-    css_path = os.path.join(os.path.dirname(__file__), "..", "static", "style.css")
-    if os.path.exists(css_path):
-        with open(css_path, "r", encoding="utf-8") as stream:
-            st.markdown(f"<style>{stream.read()}</style>", unsafe_allow_html=True)
+page_header('Relationship map', 'Explore connections and inspect the evidence behind each association.')
 
-
-load_css()
-st.markdown("<h1 class='neon-text'>CIA WEB // CORRELATION MATRIX</h1>", unsafe_allow_html=True)
-st.markdown("Filter identities, inspect evidence, and trace why two datapoints are connected.")
 
 result = render_scan_detail_bar(st, "cia_web")
 autorefresh_running(st, result, "cia_web")
@@ -97,7 +89,7 @@ if result is not None:
             physics=physics,
             highlight_path=path,
         )
-        components.v1.html(graph_html, height=800, scrolling=True)
+        components.v1.html(graph_html, height=700, scrolling=True)
         with st.expander("Visible entity evidence"):
             st.dataframe(
                 [{
