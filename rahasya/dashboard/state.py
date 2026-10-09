@@ -255,6 +255,9 @@ def render_scan_detail_bar(st, key: str) -> Optional[ScanResult]:
     progress = SCAN_STORE.load_status(options[label]) or {}
     middle.metric("Status", progress.get("status", result.status.value if result else "N/A"))
     right.metric("Entities", progress.get("entity_count", result.stats.total_entities if result else 0))
+    error = (result.error if result else None) or progress.get("error")
+    if error:
+        st.error(f"Assessment error: {error}")
     from rahasya.dashboard.ui import demo_notice
     demo_notice(result)
     return result

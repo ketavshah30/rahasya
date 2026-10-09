@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -42,7 +43,16 @@ class ScanStore:
                 json.dump(payload, stream, ensure_ascii=False, indent=2)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temp_name, path)
+            # Windows readers/virus scanners can briefly deny replacement.
+            # Keep the old snapshot intact and retry only sharing/access errors.
+            for attempt in range(8):
+                try:
+                    os.replace(temp_name, path)
+                    break
+                except PermissionError as exc:
+                    if getattr(exc, "winerror", None) not in {5, 32, 33} or attempt == 7:
+                        raise
+                    time.sleep(min(0.01 * 2**attempt, 0.2))
         finally:
             if os.path.exists(temp_name):
                 os.unlink(temp_name)
@@ -57,7 +67,9 @@ class ScanStore:
             return None
         try:
             with path.open("r", encoding="utf-8") as stream:
-                return ScanResult.model_validate(json.load(stream))
+                payload = stream.read()
+            # Close the file before parsing/validation so writers can replace it.
+            return ScanResult.model_validate_json(payload)
         except (OSError, json.JSONDecodeError, ValueError):
             return None
 
@@ -97,7 +109,8 @@ class ScanStore:
         if path.exists():
             try:
                 with path.open("r", encoding="utf-8") as stream:
-                    return json.load(stream)
+                    payload = stream.read()
+                return json.loads(payload)
             except (OSError, json.JSONDecodeError):
                 pass
         result = self.load(scan_id)

@@ -69,3 +69,17 @@ def test_empty_overview_and_navigation_entry(demo_store):
     assert any("Your workspace is ready" in e.value for e in app.info)
     shell = AppTest.from_file(str(PAGES.parent / "app.py")).run(timeout=25)
     assert not shell.exception
+
+
+def test_failed_assessment_displays_saved_error(demo_store):
+    from rahasya.core.models import ScanResult, ScanStatus
+
+    demo_store.save(ScanResult(
+        scan_id="failed-save", status=ScanStatus.FAILED,
+        error="PermissionError: [WinError 5] Access is denied",
+    ))
+    # Orchestrator status sidecars may omit the error; use the result fallback.
+    demo_store.save_status("failed-save", status="FAILED")
+    app = AppTest.from_file(str(PAGES / "09_Evidence.py")).run(timeout=25)
+    assert not app.exception
+    assert any("WinError 5" in item.value for item in app.error)
